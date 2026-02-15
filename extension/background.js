@@ -132,8 +132,15 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     }).catch(() => {});
   } catch (err) {
     chrome.tabs.sendMessage(tab.id, {
+      type: 'PLAY_TTS_FALLBACK',
+      payload: {
+        text: selectedText.slice(0, 1200),
+        reason: (err && err.message) ? err.message : 'ElevenLabs unavailable'
+      },
+    }).catch(() => {});
+    chrome.tabs.sendMessage(tab.id, {
       type: 'TTS_ERROR',
-      payload: { message: (err && err.message) ? err.message : 'Read Aloud failed.' },
+      payload: { message: `ElevenLabs unavailable. Switched to local voice. ${(err && err.message) ? err.message : ''}`.trim(), text: selectedText.slice(0, 1200) },
     }).catch(() => {});
   }
 });
@@ -386,6 +393,23 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         chrome.tabs.sendMessage(dash.id, {
           source: 'guardiapass_extension',
           type: 'REQUEST_VAULT_SNAPSHOT',
+          traceId
+        }).catch(() => {});
+        sendResponse({ status: 'requested', traceId });
+      } else {
+        sendResponse({ status: 'error', msg: 'Dashboard not open' });
+      }
+    });
+    return true;
+  }
+
+  if (request.type === 'REQUEST_UI_SETTINGS') {
+    findDashboardTab().then(async (dash) => {
+      if (!dash) dash = await ensureDashboardOpen();
+      if (dash) {
+        chrome.tabs.sendMessage(dash.id, {
+          source: 'guardiapass_extension',
+          type: 'REQUEST_UI_SETTINGS',
           traceId
         }).catch(() => {});
         sendResponse({ status: 'requested', traceId });

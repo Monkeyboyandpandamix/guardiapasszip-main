@@ -13,6 +13,8 @@
             --gp-text-muted: #cbd5e1;
             --gp-text-subtle: #94a3b8;
             --gp-focus-ring: rgba(56, 189, 248, 0.6);
+            --gp-panel-bg: rgba(15, 23, 42, 0.7);
+            --gp-panel-border: rgba(16, 185, 129, 0.12);
         }
         body {
             font-family: 'Inter', sans-serif;
@@ -20,9 +22,9 @@
             color: var(--gp-text-primary);
         }
         .glass-panel {
-            background: rgba(15, 23, 42, 0.7);
+            background: var(--gp-panel-bg);
             backdrop-filter: blur(12px);
-            border: 1px solid rgba(16, 185, 129, 0.1);
+            border: 1px solid var(--gp-panel-border);
         }
         ::-webkit-scrollbar {
             width: 8px;
@@ -97,6 +99,23 @@
         select:focus-visible {
             outline: none !important;
             box-shadow: 0 0 0 2px rgba(2, 6, 23, 0.95), 0 0 0 4px var(--gp-focus-ring) !important;
+        }
+        .gp-a11y button,
+        .gp-a11y input,
+        .gp-a11y select,
+        .gp-a11y textarea {
+            font-size: 1rem !important;
+            min-height: 48px;
+        }
+        .gp-a11y [class*="text-[8px]"],
+        .gp-a11y [class*="text-[9px]"],
+        .gp-a11y [class*="text-[10px]"],
+        .gp-a11y [class*="text-xs"] {
+            font-size: 0.95rem !important;
+            letter-spacing: 0.04em !important;
+        }
+        .gp-a11y .glass-panel {
+            border-width: 1.5px;
         }
     </style>
 <script type="importmap">

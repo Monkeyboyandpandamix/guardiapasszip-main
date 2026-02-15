@@ -1,6 +1,7 @@
 
-import React, { useState, useRef } from 'react';
-import { ExternalLink, Shield, AlertTriangle, Lock, Eye, Mail, Wifi, Smartphone, BookOpen, Award, Target, ChevronRight, Search, Play, RotateCcw, XCircle, CheckCircle, ArrowRight } from 'lucide-react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { ExternalLink, Shield, AlertTriangle, Lock, Eye, Mail, Wifi, Smartphone, BookOpen, Award, Target, ChevronRight, Search, Play, RotateCcw, XCircle, CheckCircle, ArrowRight, Bug, RefreshCw } from 'lucide-react';
+import { cyberIntelApi } from '../services/api';
 
 interface Resource {
   title: string;
@@ -18,6 +19,34 @@ interface Category {
   icon: React.ReactNode;
   color: string;
   resources: Resource[];
+}
+
+interface CyberIntelItem {
+  cveId: string;
+  published: string | null;
+  lastModified: string | null;
+  description: string;
+  severity: string;
+  score: number | null;
+  references: string[];
+  exploitedInWild: boolean;
+  kev: null | {
+    vendorProject: string;
+    product: string;
+    vulnerabilityName: string;
+    dateAdded: string;
+    knownRansomwareCampaignUse: string;
+  };
+}
+
+interface CyberIntelPayload {
+  updatedAt: number;
+  sourceWindowHours: number;
+  cves: CyberIntelItem[];
+  totalNvdItems: number;
+  totalKevItems: number;
+  cache?: { hit: boolean; stale: boolean; ttlMs: number };
+  warning?: string;
 }
 
 const categories: Category[] = [
@@ -289,6 +318,16 @@ const difficultyColors: Record<string, { bg: string; text: string }> = {
   beginner: { bg: 'bg-emerald-500/10', text: 'text-emerald-400' },
   intermediate: { bg: 'bg-amber-500/10', text: 'text-amber-400' },
   advanced: { bg: 'bg-red-500/10', text: 'text-red-400' },
+};
+
+const severityClass = (severity: string) => {
+  const s = String(severity || '').toUpperCase();
+  if (s.includes('CRITICAL')) return 'bg-red-500/10 text-red-400 border border-red-500/20';
+  if (s.includes('HIGH')) return 'bg-orange-500/10 text-orange-400 border border-orange-500/20';
+  if (s.includes('MEDIUM')) return 'bg-amber-500/10 text-amber-400 border border-amber-500/20';
+  if (s.includes('LOW')) return 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20';
+  if (s.includes('KNOWN-EXPLOITED')) return 'bg-fuchsia-500/10 text-fuchsia-400 border border-fuchsia-500/20';
+  return 'bg-slate-500/10 text-slate-300 border border-white/10';
 };
 
 const ScamSimulator: React.FC = () => {
@@ -594,6 +633,10 @@ const ScamSimulator: React.FC = () => {
 const Education: React.FC = () => {
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [intel, setIntel] = useState<CyberIntelPayload | null>(null);
+  const [intelLoading, setIntelLoading] = useState(true);
+  const [intelError, setIntelError] = useState('');
+  const [intelExpanded, setIntelExpanded] = useState(true);
 
   const filteredCategories = categories.map(cat => ({
     ...cat,
@@ -605,6 +648,28 @@ const Education: React.FC = () => {
   })).filter(cat => searchQuery === '' || cat.resources.length > 0);
 
   const totalResources = categories.reduce((sum, cat) => sum + cat.resources.length, 0);
+
+  const loadIntel = useCallback(async (force = false) => {
+    setIntelLoading(true);
+    setIntelError('');
+    try {
+      let data = await cyberIntelApi.getRecentCves({ refresh: force, windowHours: 336 }) as CyberIntelPayload;
+      if ((!data?.cves || data.cves.length === 0) && !force) {
+        data = await cyberIntelApi.getRecentCves({ refresh: true, windowHours: 720 }) as CyberIntelPayload;
+      }
+      setIntel(data);
+    } catch (err) {
+      setIntelError(err instanceof Error ? err.message : 'Failed to fetch live CVE feed');
+    } finally {
+      setIntelLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadIntel(false);
+    const interval = setInterval(() => loadIntel(false), 6 * 60 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [loadIntel]);
 
   return (
     <div className="p-8 max-w-6xl mx-auto">
@@ -709,6 +774,102 @@ const Education: React.FC = () => {
             </div>
           );
         })}
+      </div>
+
+      <div className="mt-10 rounded-3xl border border-white/5 bg-slate-900/30 overflow-hidden">
+        <button
+          onClick={() => setIntelExpanded(v => !v)}
+          className="w-full p-6 flex items-center gap-4 text-left hover:bg-white/[0.02] transition-all"
+        >
+          <div className="p-3 rounded-2xl bg-fuchsia-500/10 text-fuchsia-400 border border-fuchsia-500/20">
+            <Bug className="w-5 h-5" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <h2 className="text-sm font-black text-white uppercase tracking-wider">Technical Threat Intel (Live CVEs)</h2>
+            <p className="text-xs text-slate-500 mt-0.5">Most recent vulnerabilities from NVD + CISA KEV, auto-refreshes every 6 hours</p>
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={(e) => { e.stopPropagation(); loadIntel(true); }}
+              className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-800/70 border border-white/10 text-[10px] font-black uppercase tracking-wider text-slate-300 hover:text-white hover:border-fuchsia-500/30"
+            >
+              <RefreshCw className={`w-3 h-3 ${intelLoading ? 'animate-spin' : ''}`} /> Refresh
+            </button>
+            <ChevronRight className={`w-4 h-4 text-slate-600 transition-transform duration-300 ${intelExpanded ? 'rotate-90' : ''}`} />
+          </div>
+        </button>
+
+        {intelExpanded && (
+          <div className="px-6 pb-6 space-y-4 animate-in fade-in slide-in-from-top-2 duration-300">
+            <div className="h-px bg-white/5 mb-1" />
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="p-4 rounded-2xl bg-slate-950/50 border border-white/5">
+                <div className="text-2xl font-black text-white">{intel?.cves?.length ?? 0}</div>
+                <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500 mt-1">Recent CVEs Loaded</div>
+              </div>
+              <div className="p-4 rounded-2xl bg-slate-950/50 border border-white/5">
+                <div className="text-2xl font-black text-fuchsia-400">{intel?.cves?.filter(c => c.exploitedInWild).length ?? 0}</div>
+                <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500 mt-1">Known Exploited</div>
+              </div>
+              <div className="p-4 rounded-2xl bg-slate-950/50 border border-white/5">
+                <div className="text-xs font-black text-slate-300">
+                  {intel?.updatedAt ? new Date(intel.updatedAt).toLocaleString() : 'Not synced'}
+                </div>
+                <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500 mt-1">Last Updated</div>
+              </div>
+            </div>
+
+            {intelError && (
+              <div className="p-4 rounded-2xl border border-red-500/20 bg-red-500/10 text-xs text-red-300">{intelError}</div>
+            )}
+            {intel?.warning && !intelError && (
+              <div className="p-4 rounded-2xl border border-amber-500/20 bg-amber-500/10 text-xs text-amber-300">{intel.warning}</div>
+            )}
+            {!intelError && intel && (!intel.cves || intel.cves.length === 0) && (
+              <div className="p-4 rounded-2xl border border-amber-500/20 bg-amber-500/10 text-xs text-amber-300">
+                No CVEs were returned yet. Click refresh to re-pull a wider live window.
+              </div>
+            )}
+
+            {intelLoading && !intel && (
+              <div className="p-5 rounded-2xl border border-white/10 bg-slate-950/40 text-xs text-slate-400">Loading latest vulnerability feed...</div>
+            )}
+
+            <div className="space-y-3">
+              {(intel?.cves || []).slice(0, 12).map((item) => (
+                <div key={item.cveId} className="p-4 rounded-2xl bg-slate-950/50 border border-white/5">
+                  <div className="flex flex-wrap items-center gap-2 mb-2">
+                    <span className="px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider bg-slate-800/70 text-white">
+                      {item.cveId}
+                    </span>
+                    <span className={`px-2.5 py-1 rounded-lg text-[9px] font-black uppercase tracking-wider ${severityClass(item.severity)}`}>
+                      {item.severity}{typeof item.score === 'number' ? ` (${item.score.toFixed(1)})` : ''}
+                    </span>
+                    {item.exploitedInWild && (
+                      <span className="px-2.5 py-1 rounded-lg text-[9px] font-black uppercase tracking-wider bg-fuchsia-500/10 text-fuchsia-400 border border-fuchsia-500/20">
+                        Exploited In Wild
+                      </span>
+                    )}
+                    {item.published && (
+                      <span className="text-[10px] text-slate-500">Published: {new Date(item.published).toLocaleDateString()}</span>
+                    )}
+                  </div>
+                  <p className="text-xs text-slate-400 leading-relaxed">{item.description}</p>
+                  {item.references?.[0] && (
+                    <a
+                      href={item.references[0]}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-2 mt-3 text-[10px] font-black uppercase tracking-wider text-sky-400 hover:text-sky-300"
+                    >
+                      Open Reference <ExternalLink className="w-3 h-3" />
+                    </a>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="mt-10 p-8 rounded-3xl bg-gradient-to-br from-emerald-500/5 to-sky-500/5 border border-white/5">

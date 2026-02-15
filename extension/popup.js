@@ -25,6 +25,27 @@ let cachedData = { passwords: [], identities: [] };
 let pageContext = null;
 let isSending = false;
 
+function applyUiSettings(uiSettings = {}) {
+  const accent = typeof uiSettings.accentColor === 'string' && uiSettings.accentColor ? uiSettings.accentColor : '#10b981';
+  const brand = typeof uiSettings.brandColor === 'string' && uiSettings.brandColor ? uiSettings.brandColor : accent;
+  const bg = typeof uiSettings.bgColor === 'string' && uiSettings.bgColor ? uiSettings.bgColor : '#020617';
+  const uiScale = Number(uiSettings.uiScale || 100);
+  const accessibilityMode = !!uiSettings.accessibilityMode;
+  const effectiveScale = accessibilityMode ? Math.max(uiScale, 118) : uiScale;
+  document.documentElement.style.setProperty('--gp-accent', accent);
+  document.documentElement.style.setProperty('--gp-brand', brand);
+  document.documentElement.style.setProperty('--gp-bg', bg);
+  document.documentElement.style.setProperty('--gp-accent-soft', `${accent}24`);
+  document.body.style.fontSize = `${effectiveScale}%`;
+}
+
+if (chrome.storage?.onChanged) {
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local' || !changes.uiSettings) return;
+    applyUiSettings(changes.uiSettings.newValue || {});
+  });
+}
+
 function normalizeHost(value) {
   if (!value) return '';
   try {
@@ -45,6 +66,18 @@ init();
 async function init() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab) return;
+
+  chrome.storage.local.get(['uiSettings'], (res) => {
+    applyUiSettings(res.uiSettings || {});
+  });
+
+  chrome.runtime.sendMessage({ type: 'REQUEST_UI_SETTINGS' }, () => {
+    setTimeout(() => {
+      chrome.storage.local.get(['uiSettings'], (res) => {
+        applyUiSettings(res.uiSettings || {});
+      });
+    }, 500);
+  });
 
   runAudit(tab);
 
@@ -86,9 +119,11 @@ function runAudit(tab) {
     itemPhish.innerText = isSuspicious ? '✗ Typosquatting Risk Detected' : '✓ Domain Verified Authentic';
     auditIndicator.className = `audit-indicator ${isSuspicious || !isHttps ? 'indicator-danger' : 'indicator-safe'}`;
     statusBadge.innerText = isSuspicious ? 'THREAT DETECTED' : 'SHIELD ACTIVE';
-    statusBadge.style.color = isSuspicious ? '#ef4444' : '#10b981';
-    statusBadge.style.background = isSuspicious ? 'rgba(239,68,68,0.1)' : 'rgba(16,185,129,0.1)';
-    statusBadge.style.borderColor = isSuspicious ? 'rgba(239,68,68,0.2)' : 'rgba(16,185,129,0.2)';
+    const accent = getComputedStyle(document.documentElement).getPropertyValue('--gp-accent').trim() || '#10b981';
+    const accentSoft = getComputedStyle(document.documentElement).getPropertyValue('--gp-accent-soft').trim() || 'rgba(16,185,129,0.1)';
+    statusBadge.style.color = isSuspicious ? '#ef4444' : accent;
+    statusBadge.style.background = isSuspicious ? 'rgba(239,68,68,0.1)' : accentSoft;
+    statusBadge.style.borderColor = isSuspicious ? 'rgba(239,68,68,0.2)' : `${accent}55`;
   } catch (e) {
     auditDomain.innerText = 'System Page';
     auditIndicator.className = 'audit-indicator indicator-safe';

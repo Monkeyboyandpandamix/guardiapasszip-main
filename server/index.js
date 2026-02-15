@@ -83,8 +83,15 @@ const BACKBOARD_API_KEY = process.env.BACKBOARD_API_KEY || '';
 const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY || '';
 const ELEVENLABS_VOICE_ID = process.env.ELEVENLABS_VOICE_ID || 'EXAVITQu4vr4xnSDxMaL';
 const ELEVENLABS_MODEL_ID = process.env.ELEVENLABS_MODEL_ID || 'eleven_multilingual_v2';
+const NVD_API_KEY = process.env.NVD_API_KEY || '';
+const CYBER_INTEL_CACHE_MS = Number(process.env.CYBER_INTEL_CACHE_MS || 6 * 60 * 60 * 1000);
+const CYBER_INTEL_EMPTY_CACHE_MS = Number(process.env.CYBER_INTEL_EMPTY_CACHE_MS || 15 * 60 * 1000);
 let aiFactoryOverride = null;
 let fetchImplOverride = null;
+const cyberIntelCache = {
+  updatedAt: 0,
+  data: null,
+};
 
 export function __setAIFactoryForTests(factory) {
   aiFactoryOverride = factory;
@@ -505,6 +512,201 @@ async function getGemini() {
 
 function getFetchImpl() {
   return fetchImplOverride || globalThis.fetch;
+}
+
+async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 12000) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await getFetchImpl()(url, { ...options, signal: controller.signal });
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      throw new Error(`Request failed (${response.status})${text ? `: ${text.slice(0, 180)}` : ''}`);
+    }
+    return await response.json();
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function pickBestCvss(cve) {
+  const metrics = cve?.metrics || {};
+  const all = [
+    ...(Array.isArray(metrics.cvssMetricV40) ? metrics.cvssMetricV40 : []),
+    ...(Array.isArray(metrics.cvssMetricV31) ? metrics.cvssMetricV31 : []),
+    ...(Array.isArray(metrics.cvssMetricV30) ? metrics.cvssMetricV30 : []),
+    ...(Array.isArray(metrics.cvssMetricV2) ? metrics.cvssMetricV2 : []),
+  ];
+  const chosen = all[0];
+  if (!chosen) return { score: null, severity: 'UNKNOWN', vector: '' };
+  const data = chosen.cvssData || {};
+  return {
+    score: typeof data.baseScore === 'number' ? data.baseScore : null,
+    severity: String(data.baseSeverity || chosen.baseSeverity || 'UNKNOWN'),
+    vector: String(data.vectorString || ''),
+  };
+}
+
+async function fetchNvdByWindow(windowHours) {
+  const now = new Date();
+  const start = new Date(now.getTime() - windowHours * 60 * 60 * 1000);
+  const nvdUrl = new URL('https://services.nvd.nist.gov/rest/json/cves/2.0');
+  nvdUrl.searchParams.set('pubStartDate', start.toISOString());
+  nvdUrl.searchParams.set('pubEndDate', now.toISOString());
+  nvdUrl.searchParams.set('resultsPerPage', '80');
+  nvdUrl.searchParams.set('startIndex', '0');
+  const nvdHeaders = NVD_API_KEY ? { apiKey: NVD_API_KEY } : undefined;
+  return fetchJsonWithTimeout(nvdUrl.toString(), { headers: nvdHeaders });
+}
+
+async function fetchNvdLatest() {
+  const nvdUrl = new URL('https://services.nvd.nist.gov/rest/json/cves/2.0');
+  nvdUrl.searchParams.set('resultsPerPage', '80');
+  nvdUrl.searchParams.set('startIndex', '0');
+  const nvdHeaders = NVD_API_KEY ? { apiKey: NVD_API_KEY } : undefined;
+  return fetchJsonWithTimeout(nvdUrl.toString(), { headers: nvdHeaders });
+}
+
+async function fetchKevCatalog() {
+  try {
+    return await fetchJsonWithTimeout('https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json');
+  } catch (firstErr) {
+    const csvRes = await getFetchImpl()('https://www.cisa.gov/sites/default/files/csv/known_exploited_vulnerabilities.csv');
+    if (!csvRes.ok) throw firstErr;
+    const csvText = await csvRes.text();
+    const lines = csvText.split(/\r?\n/).filter(Boolean);
+    if (lines.length < 2) throw firstErr;
+    const header = lines[0].split(',').map((h) => h.replace(/^"|"$/g, '').trim());
+    const idx = (name) => header.findIndex((h) => h.toLowerCase() === name.toLowerCase());
+    const cveIdx = idx('cveID');
+    const vendorIdx = idx('vendorProject');
+    const productIdx = idx('product');
+    const vulnIdx = idx('vulnerabilityName');
+    const dateIdx = idx('dateAdded');
+    const ransomIdx = idx('knownRansomwareCampaignUse');
+    const descIdx = idx('shortDescription');
+    const rows = lines.slice(1).map((line) => {
+      const cols = line.split(',').map((v) => v.replace(/^"|"$/g, '').trim());
+      return {
+        cveID: cols[cveIdx] || '',
+        vendorProject: cols[vendorIdx] || '',
+        product: cols[productIdx] || '',
+        vulnerabilityName: cols[vulnIdx] || '',
+        dateAdded: cols[dateIdx] || '',
+        knownRansomwareCampaignUse: cols[ransomIdx] || '',
+        shortDescription: cols[descIdx] || '',
+      };
+    }).filter((r) => r.cveID);
+    return { vulnerabilities: rows };
+  }
+}
+
+async function fetchCyberIntel(windowHours = 336) {
+  const nvdHeaders = NVD_API_KEY ? { apiKey: NVD_API_KEY } : undefined;
+  void nvdHeaders;
+  const [nvdResult, kevResult] = await Promise.allSettled([
+    fetchNvdByWindow(windowHours),
+    fetchKevCatalog(),
+  ]);
+
+  let nvdPayload = nvdResult.status === 'fulfilled' ? nvdResult.value : null;
+  const kevPayload = kevResult.status === 'fulfilled' ? kevResult.value : { vulnerabilities: [] };
+
+  const firstNvdRows = Array.isArray(nvdPayload?.vulnerabilities) ? nvdPayload.vulnerabilities : [];
+  if (firstNvdRows.length === 0) {
+    try {
+      const latest = await fetchNvdLatest();
+      const latestRows = Array.isArray(latest?.vulnerabilities) ? latest.vulnerabilities : [];
+      if (latestRows.length > 0) nvdPayload = latest;
+    } catch (e) {
+      // keep original payload/error state and continue with KEV-only if possible
+    }
+  }
+
+  if (!nvdPayload && kevResult.status === 'rejected') {
+    throw new Error(`NVD fetch failed (${nvdResult.reason?.message || 'unknown'}) and KEV fetch failed (${kevResult.reason?.message || 'unknown'})`);
+  }
+
+  const kevList = Array.isArray(kevPayload?.vulnerabilities) ? kevPayload.vulnerabilities : [];
+  const kevByCve = new Map();
+  for (const item of kevList) {
+    const cveId = String(item?.cveID || '').trim().toUpperCase();
+    if (!cveId) continue;
+    kevByCve.set(cveId, item);
+  }
+
+  const nvdRows = Array.isArray(nvdPayload?.vulnerabilities) ? nvdPayload.vulnerabilities : [];
+  const cves = nvdRows
+    .map((row) => {
+      const cve = row?.cve || {};
+      const cveId = String(cve.id || '').trim().toUpperCase();
+      if (!cveId) return null;
+      const description = (Array.isArray(cve.descriptions) ? cve.descriptions : [])
+        .find((d) => d?.lang === 'en')?.value || 'No description available.';
+      const refs = (Array.isArray(cve.references) ? cve.references : []).map((r) => r?.url).filter(Boolean);
+      const cvss = pickBestCvss(cve);
+      const kevMatch = kevByCve.get(cveId);
+      return {
+        cveId,
+        published: cve.published || null,
+        lastModified: cve.lastModified || null,
+        description: String(description).replace(/\s+/g, ' ').trim(),
+        severity: cvss.severity,
+        score: cvss.score,
+        vector: cvss.vector,
+        references: refs.slice(0, 3),
+        exploitedInWild: Boolean(kevMatch),
+        kev: kevMatch
+          ? {
+              vendorProject: kevMatch.vendorProject || '',
+              product: kevMatch.product || '',
+              vulnerabilityName: kevMatch.vulnerabilityName || '',
+              dateAdded: kevMatch.dateAdded || '',
+              knownRansomwareCampaignUse: kevMatch.knownRansomwareCampaignUse || '',
+            }
+          : null,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => new Date(b.published || 0).getTime() - new Date(a.published || 0).getTime());
+
+  const kevOnly = kevList
+    .map((item) => {
+      const cveId = String(item?.cveID || '').trim().toUpperCase();
+      if (!cveId || cves.some((c) => c.cveId === cveId)) return null;
+      return {
+        cveId,
+        published: null,
+        lastModified: null,
+        description: String(item?.shortDescription || item?.vulnerabilityName || 'Known exploited vulnerability'),
+        severity: 'KNOWN-EXPLOITED',
+        score: null,
+        vector: '',
+        references: [],
+        exploitedInWild: true,
+        kev: {
+          vendorProject: item.vendorProject || '',
+          product: item.product || '',
+          vulnerabilityName: item.vulnerabilityName || '',
+          dateAdded: item.dateAdded || '',
+          knownRansomwareCampaignUse: item.knownRansomwareCampaignUse || '',
+        },
+      };
+    })
+    .filter(Boolean)
+    .slice(0, 20);
+
+  return {
+    updatedAt: Date.now(),
+    sourceWindowHours: windowHours,
+    cves: [...cves.slice(0, 40), ...kevOnly],
+    totalNvdItems: nvdRows.length,
+    totalKevItems: kevList.length,
+    sourceStatus: {
+      nvd: nvdResult.status === 'fulfilled' ? 'ok' : 'degraded',
+      kev: kevResult.status === 'fulfilled' ? 'ok' : 'degraded',
+    },
+  };
 }
 
 function hasGeminiConfigured() {
@@ -936,6 +1138,35 @@ app.post('/api/tts/elevenlabs', applyRateLimit('tts-elevenlabs', 60), async (req
     });
   } catch (err) {
     res.status(500).json({ error: 'ElevenLabs TTS failed: ' + err.message });
+  }
+});
+
+app.get('/api/cyberacademy/cves', applyRateLimit('cyberacademy-cves', 60), async (req, res) => {
+  const forceRefresh = req.query.refresh === '1';
+  const windowHoursRaw = Number(req.query.windowHours || 336);
+  const windowHours = Number.isFinite(windowHoursRaw) ? Math.min(Math.max(windowHoursRaw, 24), 720) : 336;
+  const cachedCount = Array.isArray(cyberIntelCache.data?.cves) ? cyberIntelCache.data.cves.length : 0;
+  const ttl = cachedCount === 0 ? CYBER_INTEL_EMPTY_CACHE_MS : CYBER_INTEL_CACHE_MS;
+  const stale = Date.now() - cyberIntelCache.updatedAt > ttl;
+
+  if (!forceRefresh && cyberIntelCache.data && !stale) {
+    return res.json({ ...cyberIntelCache.data, cache: { hit: true, stale: false, ttlMs: ttl } });
+  }
+
+  try {
+    const intel = await fetchCyberIntel(windowHours);
+    cyberIntelCache.data = intel;
+    cyberIntelCache.updatedAt = Date.now();
+    res.json({ ...intel, cache: { hit: false, stale: false, ttlMs: intel.cves.length === 0 ? CYBER_INTEL_EMPTY_CACHE_MS : CYBER_INTEL_CACHE_MS } });
+  } catch (err) {
+    if (cyberIntelCache.data) {
+      return res.json({
+        ...cyberIntelCache.data,
+        cache: { hit: true, stale: true, ttlMs: ttl },
+        warning: `Live refresh failed; showing cached results. ${err.message}`,
+      });
+    }
+    res.status(502).json({ error: `Unable to fetch live cyber intel: ${err.message}` });
   }
 });
 

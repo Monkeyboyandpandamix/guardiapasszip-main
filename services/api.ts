@@ -170,3 +170,13 @@ export const backboardApi = {
   sendMessage: (threadId: string, content: string) =>
     apiCall(`/backboard/messages/${threadId}`, { method: 'POST', body: JSON.stringify({ content }) }),
 };
+
+export const cyberIntelApi = {
+  getRecentCves: (options?: { refresh?: boolean; windowHours?: number }) => {
+    const params = new URLSearchParams();
+    if (options?.refresh) params.set('refresh', '1');
+    if (options?.windowHours) params.set('windowHours', String(options.windowHours));
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    return apiCall(`/cyberacademy/cves${suffix}`);
+  },
+};

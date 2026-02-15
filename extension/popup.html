@@ -3,51 +3,61 @@
 <head>
   <meta charset="UTF-8">
   <style>
+    :root {
+      --gp-bg: #020617;
+      --gp-surface: #0f172a;
+      --gp-text: #f8fafc;
+      --gp-muted: #94a3b8;
+      --gp-border: #1e293b;
+      --gp-accent: #10b981;
+      --gp-brand: #10b981;
+      --gp-accent-soft: rgba(16, 185, 129, 0.14);
+    }
     body { 
-        width: 360px; height: 580px; margin: 0; background: #020617; color: #f8fafc; 
+        width: 360px; height: 580px; margin: 0; background: var(--gp-bg); color: var(--gp-text); 
         font-family: 'Inter', -apple-system, sans-serif; overflow: hidden;
     }
     .container { padding: 20px; display: flex; flex-direction: column; height: 100%; box-sizing: border-box; }
     .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
     .header h1 { font-size: 16px; margin: 0; font-weight: 900; }
-    .header span { color: #10b981; }
-    .status-badge { font-size: 8px; font-weight: 900; background: rgba(16, 185, 129, 0.1); color: #10b981; padding: 4px 8px; border-radius: 6px; letter-spacing: 0.1em; border: 1px solid rgba(16, 185, 129, 0.2); }
+    .header span { color: var(--gp-brand); }
+    .status-badge { font-size: 8px; font-weight: 900; background: var(--gp-accent-soft); color: var(--gp-accent); padding: 4px 8px; border-radius: 6px; letter-spacing: 0.1em; border: 1px solid rgba(16, 185, 129, 0.2); }
     
     .audit-section {
-      background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(16, 185, 129, 0.1); border-radius: 20px;
+      background: rgba(15, 23, 42, 0.6); border: 1px solid color-mix(in srgb, var(--gp-accent) 22%, transparent); border-radius: 20px;
       padding: 16px; margin-bottom: 12px;
     }
     .audit-header { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
     .audit-indicator { width: 10px; height: 10px; border-radius: 50%; }
-    .indicator-safe { background: #10b981; box-shadow: 0 0 10px #10b981; }
+    .indicator-safe { background: var(--gp-accent); box-shadow: 0 0 10px var(--gp-accent); }
     .indicator-danger { background: #ef4444; box-shadow: 0 0 10px #ef4444; }
     .indicator-scanning { background: #6366f1; box-shadow: 0 0 10px #6366f1; animation: pulse 1s infinite; }
     
     @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
 
-    .audit-item { display: flex; align-items: center; gap: 8px; font-size: 11px; margin-bottom: 8px; color: #94a3b8; }
-    .audit-item.ok { color: #10b981; }
+    .audit-item { display: flex; align-items: center; gap: 8px; font-size: 11px; margin-bottom: 8px; color: var(--gp-muted); }
+    .audit-item.ok { color: var(--gp-accent); }
     .audit-item.fail { color: #ef4444; }
 
     .btn-row { display: flex; gap: 6px; margin-bottom: 12px; }
     .btn { flex: 1; padding: 12px; border-radius: 14px; border: none; cursor: pointer; font-weight: 800; font-size: 10px; display: flex; align-items: center; justify-content: center; gap: 6px; letter-spacing: 0.05em; }
-    .btn-primary { background: #10b981; color: white; }
-    .btn-secondary { background: #0f172a; color: #94a3b8; border: 1px solid #1e293b; }
+    .btn-primary { background: var(--gp-accent); color: white; }
+    .btn-secondary { background: var(--gp-surface); color: var(--gp-muted); border: 1px solid var(--gp-border); }
 
-    .tabs { display: flex; background: #0f172a; padding: 4px; border-radius: 12px; margin-bottom: 12px; gap: 2px; }
+    .tabs { display: flex; background: var(--gp-surface); padding: 4px; border-radius: 12px; margin-bottom: 12px; gap: 2px; }
     .tab { flex: 1; padding: 8px; text-align: center; font-size: 10px; font-weight: 900; border-radius: 8px; cursor: pointer; color: #64748b; transition: all 0.2s; white-space: nowrap; }
     .tab.active { background: #1e293b; color: #f8fafc; }
 
     .list-container { flex: 1; overflow-y: auto; padding-right: 4px; }
     .list-item { 
       padding: 12px; background: rgba(15, 23, 42, 0.5); border-radius: 14px; margin-bottom: 8px; cursor: pointer; 
-      border: 1px solid rgba(16, 185, 129, 0.05); display: flex; justify-content: space-between; align-items: center;
+      border: 1px solid color-mix(in srgb, var(--gp-accent) 12%, transparent); display: flex; justify-content: space-between; align-items: center;
     }
-    .list-item:hover { border-color: #10b981; background: rgba(16, 185, 129, 0.1); }
+    .list-item:hover { border-color: var(--gp-accent); background: var(--gp-accent-soft); }
     .list-item h4 { margin: 0; font-size: 12px; font-weight: 800; }
     .list-item p { margin: 2px 0 0; font-size: 9px; color: #64748b; font-family: monospace; overflow: hidden; text-overflow: ellipsis; max-width: 200px; }
     
-    .autofill-btn { font-size: 8px; font-weight: 900; color: #10b981; background: rgba(16, 185, 129, 0.1); padding: 4px 8px; border-radius: 6px; border: 1px solid rgba(16, 185, 129, 0.2); }
+    .autofill-btn { font-size: 8px; font-weight: 900; color: var(--gp-accent); background: var(--gp-accent-soft); padding: 4px 8px; border-radius: 6px; border: 1px solid rgba(16, 185, 129, 0.2); }
 
     .empty-state { text-align: center; padding: 40px 20px; color: #475569; }
     .empty-state p { font-size: 11px; margin: 8px 0 0; }
@@ -62,7 +72,7 @@
 
     .chat-header {
       display: flex; align-items: center; gap: 10px; margin-bottom: 12px; padding-bottom: 12px;
-      border-bottom: 1px solid rgba(16, 185, 129, 0.1);
+      border-bottom: 1px solid color-mix(in srgb, var(--gp-accent) 22%, transparent);
     }
     .chat-back-btn {
       background: none; border: none; color: #94a3b8; cursor: pointer; padding: 4px;
@@ -89,8 +99,8 @@
       max-width: 90%; word-wrap: break-word;
     }
     .chat-msg.user {
-      background: rgba(16, 185, 129, 0.15); color: #d1fae5; align-self: flex-end;
-      border: 1px solid rgba(16, 185, 129, 0.2); border-bottom-right-radius: 4px;
+      background: color-mix(in srgb, var(--gp-accent) 20%, transparent); color: #d1fae5; align-self: flex-end;
+      border: 1px solid color-mix(in srgb, var(--gp-accent) 35%, transparent); border-bottom-right-radius: 4px;
     }
     .chat-msg.bot {
       background: rgba(15, 23, 42, 0.8); color: #e2e8f0; align-self: flex-start;
@@ -108,18 +118,18 @@
       display: flex; gap: 8px;
     }
     .chat-input {
-      flex: 1; padding: 12px 16px; background: #0f172a; border: 1px solid #1e293b;
+      flex: 1; padding: 12px 16px; background: var(--gp-surface); border: 1px solid var(--gp-border);
       border-radius: 14px; color: #f8fafc; font-size: 11px; outline: none;
       font-family: inherit;
     }
-    .chat-input:focus { border-color: rgba(16, 185, 129, 0.4); }
+    .chat-input:focus { border-color: color-mix(in srgb, var(--gp-accent) 50%, transparent); }
     .chat-input::placeholder { color: #475569; }
     .chat-send-btn {
-      padding: 12px 16px; background: #10b981; border: none; border-radius: 14px;
+      padding: 12px 16px; background: var(--gp-accent); border: none; border-radius: 14px;
       color: white; cursor: pointer; display: flex; align-items: center; justify-content: center;
     }
     .chat-send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-    .chat-send-btn:hover:not(:disabled) { background: #059669; }
+    .chat-send-btn:hover:not(:disabled) { filter: brightness(0.95); }
 
     .typing-indicator {
       display: flex; gap: 4px; padding: 10px 14px; align-self: flex-start;
@@ -195,7 +205,7 @@
         <div id="chatPageTitle" class="chat-page-title">Page Title</div>
         <div id="chatPageUrl" class="chat-page-url">example.com</div>
       </div>
-      <div style="width: 8px; height: 8px; border-radius: 50%; background: #10b981; box-shadow: 0 0 8px #10b981;"></div>
+      <div style="width: 8px; height: 8px; border-radius: 50%; background: var(--gp-accent); box-shadow: 0 0 8px var(--gp-accent);"></div>
     </div>
 
     <div id="chatMessages" class="chat-messages"></div>

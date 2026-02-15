@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Palette, Shield, Save, RefreshCcw, Lock, Key, CheckCircle2, AlertTriangle, Eye, EyeOff } from 'lucide-react';
+import { Palette, Shield, Save, RefreshCcw, Lock, Key, CheckCircle2, AlertTriangle, Eye, EyeOff, Accessibility, Volume2 } from 'lucide-react';
 import { PasswordEntry } from '../types';
 import { encryptData, decryptData, changeMasterPassword, verifyMasterPassword } from '../services/cryptoService';
 
@@ -10,13 +10,21 @@ interface SettingsProps {
   setTheme: (theme: AppTheme) => void;
   bgColor: string;
   setBgColor: (color: string) => void;
+  accentColor: string;
+  setAccentColor: (color: string) => void;
+  brandColor: string;
+  setBrandColor: (color: string) => void;
   uiScale: number;
   setUiScale: (scale: number) => void;
+  accessibilityMode: boolean;
+  setAccessibilityMode: (enabled: boolean) => void;
+  voiceGuidanceEnabled: boolean;
+  setVoiceGuidanceEnabled: (enabled: boolean) => void;
   passwords: PasswordEntry[];
   setPasswords: React.Dispatch<React.SetStateAction<PasswordEntry[]>>;
 }
 
-const Settings: React.FC<SettingsProps> = ({ currentTheme, setTheme, bgColor, setBgColor, uiScale, setUiScale, passwords, setPasswords }) => {
+const Settings: React.FC<SettingsProps> = ({ currentTheme, setTheme, bgColor, setBgColor, accentColor, setAccentColor, brandColor, setBrandColor, uiScale, setUiScale, accessibilityMode, setAccessibilityMode, voiceGuidanceEnabled, setVoiceGuidanceEnabled, passwords, setPasswords }) => {
   const [isSaved, setIsSaved] = useState(false);
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -63,7 +71,36 @@ const Settings: React.FC<SettingsProps> = ({ currentTheme, setTheme, bgColor, se
       midnight: '#0b1220',
       sunset: '#1f1308',
     };
+    const presetAccent: Record<AppTheme, string> = {
+      forest: '#10b981',
+      obsidian: '#f59e0b',
+      neon: '#ec4899',
+      arctic: '#38bdf8',
+      light: '#2563eb',
+      midnight: '#3b82f6',
+      sunset: '#f97316',
+    };
     setBgColor(presetBg[themeId]);
+    setAccentColor(presetAccent[themeId]);
+  };
+
+  const speakSettingsSummary = () => {
+    if (!('speechSynthesis' in window)) return;
+    const lines = [
+      `Theme is ${currentTheme}.`,
+      `Background color is ${bgColor}.`,
+      `Accent color is ${accentColor}.`,
+      `Brand color is ${brandColor}.`,
+      `Interface scale is ${uiScale} percent.`,
+      `Accessibility mode is ${accessibilityMode ? 'enabled' : 'disabled'}.`,
+      `Voice guidance is ${voiceGuidanceEnabled ? 'enabled' : 'disabled'}.`
+    ];
+    try {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(lines.join(' '));
+      utterance.rate = 1;
+      window.speechSynthesis.speak(utterance);
+    } catch (e) {}
   };
 
   const handlePasswordChange = async (e: React.FormEvent) => {
@@ -139,7 +176,7 @@ const Settings: React.FC<SettingsProps> = ({ currentTheme, setTheme, bgColor, se
           <h1 className="text-4xl font-black text-white tracking-tighter uppercase">System <span className="text-indigo-400">Config</span></h1>
           <p className="text-slate-500 font-medium text-[10px] mt-1 uppercase tracking-[0.3em]">Environment Calibration Panel</p>
         </div>
-        <button onClick={() => { localStorage.setItem('gp_theme', currentTheme); localStorage.setItem('gp_bg_color', bgColor); setIsSaved(true); setTimeout(() => setIsSaved(false), 2000); }} className="px-8 py-4 bg-indigo-600 rounded-[1.5rem] text-white font-black uppercase tracking-widest text-[10px] shadow-xl shadow-indigo-600/20">
+        <button onClick={() => { localStorage.setItem('gp_theme', currentTheme); localStorage.setItem('gp_bg_color', bgColor); localStorage.setItem('gp_accent_color', accentColor); localStorage.setItem('gp_brand_color', brandColor); localStorage.setItem('gp_accessibility_mode', accessibilityMode ? '1' : '0'); localStorage.setItem('gp_voice_guidance', voiceGuidanceEnabled ? '1' : '0'); setIsSaved(true); setTimeout(() => setIsSaved(false), 2000); }} className="px-8 py-4 rounded-[1.5rem] text-white font-black uppercase tracking-widest text-[10px] shadow-xl" style={{ backgroundColor: accentColor, boxShadow: `0 10px 24px ${accentColor}55` }}>
           {isSaved ? 'Environment Updated' : 'Save Settings'}
         </button>
       </div>
@@ -149,8 +186,8 @@ const Settings: React.FC<SettingsProps> = ({ currentTheme, setTheme, bgColor, se
           <h3 className="text-xl font-black text-white uppercase tracking-tight flex items-center gap-3 mb-8"><Palette className="w-6 h-6 text-indigo-400" /> Visual Neural Profile</h3>
           <div className="space-y-8">
             <div className="grid grid-cols-2 gap-4">
-              {themes.map((t) => (
-                <button key={t.id} onClick={() => applyThemePreset(t.id)} className={`p-6 rounded-[2rem] border transition-all text-left ${currentTheme === t.id ? 'border-indigo-500 bg-indigo-500/10' : 'border-white/5 bg-slate-950/40'}`}>
+                {themes.map((t) => (
+                <button key={t.id} onClick={() => applyThemePreset(t.id)} className={`p-6 rounded-[2rem] border transition-all text-left ${currentTheme === t.id ? 'bg-indigo-500/10' : 'border-white/5 bg-slate-950/40'}`} style={{ borderColor: currentTheme === t.id ? accentColor : undefined }}>
                   <div className={`w-3 h-3 rounded-full mb-4 ${t.color}`} />
                   <h4 className="font-black text-white text-sm uppercase mb-1">{t.name}</h4>
                   <p className="text-[10px] text-slate-500">{t.desc}</p>
@@ -161,10 +198,51 @@ const Settings: React.FC<SettingsProps> = ({ currentTheme, setTheme, bgColor, se
               <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-4">Background Chroma Tuning</h4>
               <div className="flex flex-wrap gap-3">
                 {bgColors.map(c => (
-                  <button key={c.value} onClick={() => setBgColor(c.value)} className={`px-4 py-2 rounded-xl border text-[10px] font-black transition-all ${bgColor === c.value ? 'border-indigo-500 bg-indigo-500/10 text-white' : 'border-white/5 text-slate-500'}`}>
+                  <button key={c.value} onClick={() => setBgColor(c.value)} className={`px-4 py-2 rounded-xl border text-[10px] font-black transition-all ${bgColor === c.value ? 'bg-indigo-500/10 text-white' : 'border-white/5 text-slate-500'}`} style={{ borderColor: bgColor === c.value ? accentColor : undefined }}>
                     {c.name}
                   </button>
                 ))}
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2">Custom Accent (Color Wheel)</h4>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="color"
+                    value={accentColor}
+                    onChange={(e) => setAccentColor(e.target.value)}
+                    className="h-10 w-16 rounded border border-white/20 bg-transparent"
+                    aria-label="Pick custom accent color"
+                  />
+                  <span className="text-xs font-mono text-slate-300">{accentColor}</span>
+                </div>
+              </div>
+              <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2">GuardiaPass Brand Color</h4>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="color"
+                    value={brandColor}
+                    onChange={(e) => setBrandColor(e.target.value)}
+                    className="h-10 w-16 rounded border border-white/20 bg-transparent"
+                    aria-label="Pick GuardiaPass brand color"
+                  />
+                  <span className="text-xs font-mono text-slate-300">{brandColor}</span>
+                </div>
+              </div>
+              <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2">Custom Background (Color Wheel)</h4>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="color"
+                    value={bgColor}
+                    onChange={(e) => setBgColor(e.target.value)}
+                    className="h-10 w-16 rounded border border-white/20 bg-transparent"
+                    aria-label="Pick custom background color"
+                  />
+                  <span className="text-xs font-mono text-slate-300">{bgColor}</span>
+                </div>
               </div>
             </div>
             <div>
@@ -175,12 +253,39 @@ const Settings: React.FC<SettingsProps> = ({ currentTheme, setTheme, bgColor, se
                     key={opt.value}
                     onClick={() => setUiScale(opt.value)}
                     className={`px-4 py-2 rounded-xl border text-[10px] font-black transition-all ${
-                      uiScale === opt.value ? 'border-indigo-500 bg-indigo-500/10 text-white' : 'border-white/5 text-slate-500'
+                      uiScale === opt.value ? 'bg-indigo-500/10 text-white' : 'border-white/5 text-slate-500'
                     }`}
+                    style={{ borderColor: uiScale === opt.value ? accentColor : undefined }}
                   >
                     {opt.label}
                   </button>
                 ))}
+              </div>
+            </div>
+            <div className="rounded-2xl border border-white/10 bg-black/20 p-5 space-y-4">
+              <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest flex items-center gap-2"><Accessibility className="w-4 h-4" /> Accessibility</h4>
+              <div className="flex flex-wrap gap-3">
+                <button
+                  onClick={() => setAccessibilityMode(!accessibilityMode)}
+                  className="px-4 py-2 rounded-xl border text-[10px] font-black text-white"
+                  style={{ borderColor: accessibilityMode ? accentColor : 'rgba(255,255,255,0.16)', backgroundColor: accessibilityMode ? `${accentColor}30` : 'transparent' }}
+                >
+                  {accessibilityMode ? 'Larger UI: On' : 'Larger UI: Off'}
+                </button>
+                <button
+                  onClick={() => setVoiceGuidanceEnabled(!voiceGuidanceEnabled)}
+                  className="px-4 py-2 rounded-xl border text-[10px] font-black text-white"
+                  style={{ borderColor: voiceGuidanceEnabled ? accentColor : 'rgba(255,255,255,0.16)', backgroundColor: voiceGuidanceEnabled ? `${accentColor}30` : 'transparent' }}
+                >
+                  {voiceGuidanceEnabled ? 'Voice Guide: On' : 'Voice Guide: Off'}
+                </button>
+                <button
+                  onClick={speakSettingsSummary}
+                  className="px-4 py-2 rounded-xl border text-[10px] font-black text-white flex items-center gap-2"
+                  style={{ borderColor: accentColor }}
+                >
+                  <Volume2 className="w-3 h-3" /> Read Options Aloud
+                </button>
               </div>
             </div>
           </div>

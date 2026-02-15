@@ -149,15 +149,59 @@
     setTimeout(() => toast.remove(), 2600);
   }
 
+  function splitSpeechChunks(text, maxLen = 220) {
+    const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!normalized) return [];
+    const chunks = [];
+    let start = 0;
+    while (start < normalized.length) {
+      const end = Math.min(start + maxLen, normalized.length);
+      let part = normalized.slice(start, end);
+      if (end < normalized.length) {
+        const breakAt = Math.max(part.lastIndexOf('. '), part.lastIndexOf('! '), part.lastIndexOf('? '), part.lastIndexOf(', '));
+        if (breakAt > 60) part = part.slice(0, breakAt + 1);
+      }
+      chunks.push(part.trim());
+      start += part.length;
+    }
+    return chunks.filter(Boolean);
+  }
+
+  function pickPreferredVoice(voices) {
+    const safeVoices = Array.isArray(voices) ? voices : [];
+    const priorities = ['Google US English', 'Microsoft Aria', 'Samantha', 'Alex', 'Jenny', 'Zira', 'en-US'];
+    for (const p of priorities) {
+      const match = safeVoices.find(v => (v.name || '').includes(p) || (v.lang || '').includes(p));
+      if (match) return match;
+    }
+    return safeVoices.find(v => (v.lang || '').toLowerCase().startsWith('en')) || safeVoices[0] || null;
+  }
+
   function speakWithBrowserTts(text) {
     const phrase = String(text || '').trim();
     if (!phrase || !('speechSynthesis' in window)) return false;
     try {
-      window.speechSynthesis.cancel();
-      const utter = new SpeechSynthesisUtterance(phrase.slice(0, 280));
-      utter.rate = 1;
-      utter.pitch = 1;
-      window.speechSynthesis.speak(utter);
+      const engine = window.speechSynthesis;
+      engine.cancel();
+      const voices = engine.getVoices();
+      const selectedVoice = pickPreferredVoice(voices);
+      const chunks = splitSpeechChunks(phrase, 210);
+      if (!chunks.length) return false;
+      let idx = 0;
+      const speakNext = () => {
+        if (idx >= chunks.length) return;
+        const utter = new SpeechSynthesisUtterance(chunks[idx]);
+        if (selectedVoice) utter.voice = selectedVoice;
+        utter.lang = (selectedVoice && selectedVoice.lang) || 'en-US';
+        utter.rate = 0.98;
+        utter.pitch = 1;
+        utter.onend = () => {
+          idx += 1;
+          speakNext();
+        };
+        engine.speak(utter);
+      };
+      speakNext();
       return true;
     } catch {
       return false;
@@ -216,6 +260,7 @@
     window.addEventListener('message', (e) => {
       if (e.data && e.data.source === 'guardiapass_dashboard') {
         if (e.data.type === 'VAULT_SYNC') safeStorageSet({ vault: e.data.payload });
+        if (e.data.type === 'UI_SETTINGS_SYNC') safeStorageSet({ uiSettings: e.data.payload });
         
         if (e.data.type === 'DECRYPTED_AUTOFILL_READY') {
           safeRuntimeSend({
@@ -262,6 +307,8 @@
         }
       });
     }
+
+    safeRuntimeSend({ type: 'REQUEST_UI_SETTINGS' });
     return;
   }
 
@@ -644,7 +691,14 @@
     }
 
     if (msg.type === 'TTS_ERROR') {
-      showTtsToast(msg?.payload?.message || 'Read Aloud failed.', true);
+      const fallbackSpoke = speakWithBrowserTts(msg?.payload?.text || '');
+      showTtsToast(fallbackSpoke ? 'ElevenLabs unavailable. Used local voice fallback.' : (msg?.payload?.message || 'Read Aloud failed.'), !fallbackSpoke);
+      return;
+    }
+
+    if (msg.type === 'PLAY_TTS_FALLBACK') {
+      const fallbackSpoke = speakWithBrowserTts(msg?.payload?.text || '');
+      showTtsToast(fallbackSpoke ? 'Reading with local voice fallback.' : 'Fallback voice unavailable.', !fallbackSpoke);
       return;
     }
 

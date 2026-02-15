@@ -13,7 +13,7 @@ import NetworkMonitor from './components/NetworkMonitor';
 import ExtensionSimulator from './components/ExtensionSimulator';
 import Education from './components/Education';
 import AIAdvisor from './components/AIAdvisor';
-import { Lock, Terminal, X, Activity, FlaskConical } from 'lucide-react';
+import { Lock, Terminal, X, Activity, FlaskConical, Volume2 } from 'lucide-react';
 import { askPageQuestion } from './services/geminiService';
 import { decryptData, encryptData } from './services/cryptoService';
 import { verifyEmail } from './services/hunterService';
@@ -22,6 +22,15 @@ import { demoMode } from './services/demoMode';
 import { DEMO_PASSWORDS, DEMO_IDENTITIES, DEMO_VISITS } from './services/demoData';
 
 const IN_MEMORY_VISIT_LIMIT = 10000;
+const THEME_ACCENTS: Record<AppTheme, string> = {
+  forest: '#10b981',
+  obsidian: '#f59e0b',
+  neon: '#ec4899',
+  arctic: '#38bdf8',
+  light: '#2563eb',
+  midnight: '#3b82f6',
+  sunset: '#f97316',
+};
 
 const mergeRecentVisits = (incoming: VisitRecord[], existing: VisitRecord[], limit = IN_MEMORY_VISIT_LIMIT): VisitRecord[] => {
   const merged = [...incoming, ...existing].sort((a, b) => b.timestamp - a.timestamp);
@@ -36,11 +45,26 @@ const mergeRecentVisits = (incoming: VisitRecord[], existing: VisitRecord[], lim
   return deduped;
 };
 
+const hexToRgba = (hex: string, alpha: number) => {
+  const cleaned = String(hex || '').trim().replace('#', '');
+  const full = cleaned.length === 3 ? cleaned.split('').map(c => c + c).join('') : cleaned;
+  if (!/^[0-9a-fA-F]{6}$/.test(full)) return `rgba(15,23,42,${alpha})`;
+  const num = parseInt(full, 16);
+  const r = (num >> 16) & 255;
+  const g = (num >> 8) & 255;
+  const b = num & 255;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+};
+
 const App: React.FC = () => {
   const [session, setSession] = useState<SessionState>({ isLocked: true, userEmail: null, lastActive: Date.now() });
   const [activeSection, setActiveSection] = useState<AppSection>(AppSection.Vault);
   const [theme, setTheme] = useState<AppTheme>(() => (localStorage.getItem('gp_theme') as AppTheme) || 'forest');
   const [bgColor, setBgColor] = useState(() => localStorage.getItem('gp_bg_color') || '#020617');
+  const [accentColor, setAccentColor] = useState(() => localStorage.getItem('gp_accent_color') || THEME_ACCENTS[(localStorage.getItem('gp_theme') as AppTheme) || 'forest']);
+  const [brandColor, setBrandColor] = useState(() => localStorage.getItem('gp_brand_color') || localStorage.getItem('gp_accent_color') || THEME_ACCENTS[(localStorage.getItem('gp_theme') as AppTheme) || 'forest']);
+  const [accessibilityMode, setAccessibilityMode] = useState<boolean>(() => localStorage.getItem('gp_accessibility_mode') === '1');
+  const [voiceGuidanceEnabled, setVoiceGuidanceEnabled] = useState<boolean>(() => localStorage.getItem('gp_voice_guidance') === '1');
   const [uiScale, setUiScale] = useState<number>(() => {
     const raw = Number(localStorage.getItem('gp_ui_scale') || '100');
     return [90, 100, 110].includes(raw) ? raw : 100;
@@ -59,6 +83,7 @@ const App: React.FC = () => {
   
   const lastHeartbeat = useRef<number>(Date.now());
   const pendingVisitBatchRef = useRef<VisitRecord[]>([]);
+  const lastSpokenLabelRef = useRef('');
 
   const addLog = useCallback((msg: string, type: 'in' | 'out' | 'sys' = 'sys', traceId?: string) => {
     setDebugLogs(prev => [{ 
@@ -140,16 +165,92 @@ const App: React.FC = () => {
   }, [bgColor]);
 
   useEffect(() => {
+    localStorage.setItem('gp_theme', theme);
+  }, [theme]);
+
+  useEffect(() => {
+    localStorage.setItem('gp_bg_color', bgColor);
+  }, [bgColor]);
+
+  useEffect(() => {
+    localStorage.setItem('gp_accent_color', accentColor);
+    document.documentElement.style.setProperty('--gp-accent', accentColor);
+    document.documentElement.style.setProperty('--gp-focus-ring', `${accentColor}99`);
+    document.documentElement.style.setProperty('--gp-panel-border', hexToRgba(accentColor, 0.24));
+  }, [accentColor]);
+
+  useEffect(() => {
+    localStorage.setItem('gp_brand_color', brandColor);
+    document.documentElement.style.setProperty('--gp-brand', brandColor);
+  }, [brandColor]);
+
+  useEffect(() => {
+    document.documentElement.style.setProperty('--gp-panel-bg', hexToRgba(bgColor, 0.76));
+  }, [bgColor]);
+
+  useEffect(() => {
     localStorage.setItem('gp_ui_scale', String(uiScale));
   }, [uiScale]);
 
-  const syncToExtension = useCallback(() => {
+  useEffect(() => {
+    localStorage.setItem('gp_accessibility_mode', accessibilityMode ? '1' : '0');
+  }, [accessibilityMode]);
+
+  useEffect(() => {
+    localStorage.setItem('gp_voice_guidance', voiceGuidanceEnabled ? '1' : '0');
+  }, [voiceGuidanceEnabled]);
+
+  const syncVaultToExtension = useCallback(() => {
     window.postMessage({ source: 'guardiapass_dashboard', type: 'VAULT_SYNC', payload: { passwords, identities } }, "*");
   }, [passwords, identities]);
 
   useEffect(() => {
-    syncToExtension();
-  }, [syncToExtension]);
+    syncVaultToExtension();
+  }, [syncVaultToExtension]);
+
+  const syncUiSettingsToExtension = useCallback(() => {
+    window.postMessage({
+      source: 'guardiapass_dashboard',
+      type: 'UI_SETTINGS_SYNC',
+      payload: {
+        theme,
+        bgColor,
+        accentColor,
+        brandColor,
+        uiScale,
+        accessibilityMode,
+        voiceGuidanceEnabled,
+      },
+    }, "*");
+  }, [theme, bgColor, accentColor, brandColor, uiScale, accessibilityMode, voiceGuidanceEnabled]);
+
+  useEffect(() => {
+    syncUiSettingsToExtension();
+  }, [syncUiSettingsToExtension]);
+
+  useEffect(() => {
+    if (!voiceGuidanceEnabled || typeof window === 'undefined' || !window.speechSynthesis) return;
+    const onFocus = (ev: FocusEvent) => {
+      const target = ev.target as HTMLElement | null;
+      if (!target) return;
+      const label = target.getAttribute('aria-label')
+        || target.getAttribute('title')
+        || target.textContent?.trim()
+        || target.getAttribute('placeholder')
+        || target.id;
+      const clean = String(label || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+      if (!clean || clean === lastSpokenLabelRef.current) return;
+      lastSpokenLabelRef.current = clean;
+      try {
+        window.speechSynthesis.cancel();
+        const utterance = new SpeechSynthesisUtterance(clean);
+        utterance.rate = 1;
+        window.speechSynthesis.speak(utterance);
+      } catch (e) {}
+    };
+    window.addEventListener('focusin', onFocus, true);
+    return () => window.removeEventListener('focusin', onFocus, true);
+  }, [voiceGuidanceEnabled]);
 
   const handleBridgeMessages = useCallback(async (event: MessageEvent) => {
     const data = event.data;
@@ -163,7 +264,8 @@ const App: React.FC = () => {
         setIsExtensionActive(true);
         addLog("Bridge: Signal Established", "sys");
       }
-      syncToExtension();
+      syncVaultToExtension();
+      syncUiSettingsToExtension();
       return;
     }
 
@@ -299,10 +401,14 @@ const App: React.FC = () => {
     }
 
     if (type === 'REQUEST_VAULT_SNAPSHOT') {
-      syncToExtension();
+      syncVaultToExtension();
       addLog(`Vault: Snapshot sync requested by extension`, 'sys', traceId);
     }
-  }, [isExtensionActive, addLog, syncToExtension, chatHistories, session.userEmail, session.isLocked]);
+    if (type === 'REQUEST_UI_SETTINGS') {
+      syncUiSettingsToExtension();
+      addLog(`UI: Settings sync requested by extension`, 'sys', traceId);
+    }
+  }, [isExtensionActive, addLog, syncVaultToExtension, syncUiSettingsToExtension, chatHistories, session.userEmail, session.isLocked]);
 
   useEffect(() => {
     window.addEventListener('message', handleBridgeMessages);
@@ -332,14 +438,15 @@ const App: React.FC = () => {
     theme === 'midnight' ? 'blue' :
     theme === 'sunset' ? 'orange' :
     'sky';
+  const effectiveUiScale = accessibilityMode ? Math.max(uiScale, 125) : uiScale;
 
   return (
-    <div className={`flex flex-col lg:flex-row h-screen overflow-hidden text-slate-200 theme-${theme}`} style={{ backgroundColor: bgColor, fontSize: `${uiScale}%` }}>
-      <Sidebar activeSection={activeSection} setActiveSection={setActiveSection} isSecure={isExtensionActive} activeColor={activeColor} />
+    <div className={`flex flex-col lg:flex-row h-screen overflow-hidden text-slate-200 theme-${theme} ${accessibilityMode ? 'gp-a11y' : ''}`} style={{ backgroundColor: bgColor, fontSize: `${effectiveUiScale}%` }}>
+      <Sidebar activeSection={activeSection} setActiveSection={setActiveSection} isSecure={isExtensionActive} activeColor={activeColor} accentColor={accentColor} brandColor={brandColor} bgColor={bgColor} />
       <main className="flex-1 flex flex-col min-w-0 h-full relative">
         <header className="h-16 shrink-0 border-b border-white/5 flex items-center justify-between px-4 sm:px-8 bg-black/20 backdrop-blur-xl z-30">
           <div className="flex items-center gap-3">
-             <div className={`w-2 h-2 rounded-full ${isExtensionActive ? `bg-${activeColor}-500 shadow-[0_0_10px_#10b981]` : 'bg-slate-700'}`} />
+             <div className="w-2 h-2 rounded-full" style={{ backgroundColor: isExtensionActive ? accentColor : '#334155', boxShadow: isExtensionActive ? `0 0 10px ${accentColor}` : 'none' }} />
              <span className="hidden sm:inline text-[10px] font-black uppercase tracking-[0.4em] text-slate-500">
                {isExtensionActive ? 'Uplink Synchronized' : 'Searching for Signal...'}
              </span>
@@ -351,6 +458,14 @@ const App: React.FC = () => {
              )}
           </div>
           <div className="flex items-center gap-4">
+             <button
+               onClick={() => setVoiceGuidanceEnabled(v => !v)}
+               className="p-2.5 text-slate-500 hover:text-cyan-400 transition-all"
+               title={voiceGuidanceEnabled ? 'Disable voice guidance' : 'Enable voice guidance'}
+               aria-label={voiceGuidanceEnabled ? 'Disable voice guidance' : 'Enable voice guidance'}
+             >
+               <Volume2 className="w-4 h-4" />
+             </button>
              <button onClick={() => setShowDebug(!showDebug)} className={`p-2.5 transition-all relative ${showDebug ? 'text-indigo-400' : 'text-slate-500 hover:text-indigo-400'}`}>
                <Terminal className="w-4 h-4" />
                {isExtensionActive && !showDebug && <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 bg-indigo-500 rounded-full animate-ping" />}
@@ -376,8 +491,16 @@ const App: React.FC = () => {
               setTheme={setTheme}
               bgColor={bgColor}
               setBgColor={setBgColor}
+              accentColor={accentColor}
+              setAccentColor={setAccentColor}
+              brandColor={brandColor}
+              setBrandColor={setBrandColor}
               uiScale={uiScale}
               setUiScale={setUiScale}
+              accessibilityMode={accessibilityMode}
+              setAccessibilityMode={setAccessibilityMode}
+              voiceGuidanceEnabled={voiceGuidanceEnabled}
+              setVoiceGuidanceEnabled={setVoiceGuidanceEnabled}
               passwords={passwords}
               setPasswords={setPasswords}
             />

@@ -61,6 +61,41 @@ __setFetchForTests(async (url) => {
   if (asString.includes('api.pwnedpasswords.com/range/12345')) {
     return new Response('ABCDEF:42\n', { status: 200 });
   }
+  if (asString.includes('services.nvd.nist.gov/rest/json/cves/2.0')) {
+    return new Response(JSON.stringify({
+      vulnerabilities: [
+        {
+          cve: {
+            id: 'CVE-2026-0001',
+            published: '2026-02-01T00:00:00.000Z',
+            lastModified: '2026-02-02T00:00:00.000Z',
+            descriptions: [{ lang: 'en', value: 'Sample test vulnerability description.' }],
+            references: [{ url: 'https://nvd.nist.gov/vuln/detail/CVE-2026-0001' }],
+            metrics: {
+              cvssMetricV31: [
+                { cvssData: { baseScore: 9.1, baseSeverity: 'CRITICAL', vectorString: 'AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H' } }
+              ],
+            },
+          },
+        },
+      ],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }
+  if (asString.includes('known_exploited_vulnerabilities.json')) {
+    return new Response(JSON.stringify({
+      vulnerabilities: [
+        {
+          cveID: 'CVE-2026-0001',
+          vendorProject: 'Test Vendor',
+          product: 'Test Product',
+          vulnerabilityName: 'Sample exploited bug',
+          dateAdded: '2026-02-03',
+          knownRansomwareCampaignUse: 'Unknown',
+          shortDescription: 'Sample KEV description',
+        },
+      ],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }
   if (asString.includes('api.elevenlabs.io/v1/text-to-speech/')) {
     const bytes = new Uint8Array([1, 2, 3, 4, 5, 6]);
     return new Response(bytes, { status: 200, headers: { 'Content-Type': 'audio/mpeg' } });
@@ -140,14 +175,24 @@ test('POST /api/tts/elevenlabs returns base64 audio payload', async () => {
   assert.ok(response.body.audioBase64.length > 0);
 });
 
+test('GET /api/cyberacademy/cves returns recent technical intel', async () => {
+  const response = await invokeJson('GET', '/api/cyberacademy/cves', null);
+  assert.equal(response.statusCode, 200);
+  assert.ok(Array.isArray(response.body.cves));
+  assert.ok(response.body.cves.length >= 1);
+  assert.equal(response.body.cves[0].cveId, 'CVE-2026-0001');
+  assert.equal(response.body.cves[0].exploitedInWild, true);
+});
+
 function invokeJson(method, url, body) {
-  const payload = JSON.stringify(body ?? {});
-  const req = Readable.from([payload]);
+  const hasBody = body !== null && body !== undefined;
+  const payload = hasBody ? JSON.stringify(body) : '';
+  const req = hasBody ? Readable.from([payload]) : Readable.from([]);
   req.method = method;
   req.url = url;
   req.headers = {
     'content-type': 'application/json',
-    'content-length': Buffer.byteLength(payload).toString(),
+    'content-length': hasBody ? Buffer.byteLength(payload).toString() : '0',
   };
   req.connection = {};
   req.socket = {};
