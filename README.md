@@ -1,6 +1,6 @@
 # GuardiaPass - Encrypted AI Security Dashboard
 
-GuardiaPass is a zero-knowledge, encryption-first password manager and cybersecurity dashboard. Every credential stored in the vault is encrypted with AES-GCM-256 before it ever touches storage. AI-powered threat detection, dark web breach scanning, and a Chrome extension work together to keep your accounts safe — all built on top of the Web Crypto API with a full-stack architecture and PostgreSQL persistence.
+GuardiaPass is a zero-knowledge, encryption-first password manager and cybersecurity dashboard. Every credential stored in the vault is encrypted with AES-GCM-256 before it ever touches storage. AI-powered threat detection, dark web breach scanning, and a Chrome extension work together to keep your accounts safe.
 
 ---
 
@@ -20,11 +20,17 @@ All sensitive data in GuardiaPass is protected by client-side encryption. Vault 
 
 ### How It Works
 
-1. **Master Password** — On login, the user provides a master password. This password is used as the input to key derivation. The default is `admin123` — it should be changed immediately after setup.
-2. **Key Derivation** — PBKDF2-SHA256 with 100,000 iterations and a fixed salt derives a 256-bit AES key from the master password.
+1. **Master Password** — On login, the user provides a master password. This password is used as the input to key derivation. The default is `admin123` on first run and should be changed immediately.
+2. **Key Derivation** — PBKDF2-SHA256 with 100,000 iterations derives a 256-bit AES key from the master password. New installs use a generated per-device KDF salt.
 3. **Encrypt on Save** — When a credential is added to the vault, the password field is encrypted with AES-GCM-256 using a random 96-bit IV. The IV is prepended to the ciphertext and the result is Base64-encoded. The encrypted data is then sent to the Express backend and stored in PostgreSQL.
 4. **Decrypt on Use** — When autofill or viewing is requested, the ciphertext is retrieved from the database, decoded, the IV is split from the payload, and AES-GCM decryption produces the original password — all in the browser.
 5. **Re-Encryption on Password Change** — Changing the master password first decrypts all entries with the old key, then updates the master password, then re-encrypts every entry with the new key. If re-encryption fails mid-process, some entries may need manual recovery.
+
+### Master Key Handling (Current)
+
+- The app uses a verifier-hash + runtime session key model for master password checks.
+- The runtime master secret is session-scoped while unlocked.
+- Legacy installs are migrated automatically after successful login.
 
 ### Key Cache
 
@@ -83,10 +89,12 @@ Password breach checks use the Have I Been Pwned (HIBP) range API. The password 
 ### Chrome Extension
 - Manifest V3 service worker architecture
 - Automatic password detection and save prompts
-- One-click autofill for matching sites
+- One-click autofill with domain-aware matching and safer field targeting
+- Username-first autofill support for multi-step login flows (Google-style email-first login)
 - Hunter.io email verification for Gmail and Outlook
 - Phishing block page for detected threats
 - In-popup AI chat for live page analysis
+- Right-click **Read Aloud with GuardiaPass** (ElevenLabs + browser voice fallback)
 
 ---
 
@@ -163,6 +171,7 @@ ELEVENLABS_API_KEY=your_elevenlabs_api_key
 ELEVENLABS_VOICE_ID=optional_voice_id
 ELEVENLABS_MODEL_ID=optional_model_id
 DATABASE_URL=your_postgresql_connection_string
+ALLOWED_ORIGINS=http://localhost:5000,https://your-app-domain.com
 ```
 
 You can copy the template and fill it in:
@@ -213,7 +222,7 @@ This backfills `vault_identities.password_cipher` so identity passwords are pers
 - **Address Auto-Suggestions**: While typing an address in `Identities`, likely addresses are suggested; selecting one auto-fills city/state/ZIP when possible.
 - **Hidden Photos (Encrypted)**: In the `Hidden Photos` vault tab, upload images to encrypt and store locally. You can view, download, or delete entries later.
 
-### 5. Install the Chrome Extension
+### 6. Install the Chrome Extension
 
 1. Open `chrome://extensions` in Chrome
 2. Enable **Developer Mode** (toggle in the top-right corner)
@@ -229,8 +238,17 @@ The extension requires the dashboard to be open in a tab for AI features. If it 
 3. The extension sends the selected text to the local `/api/tts/elevenlabs` endpoint and plays generated audio in-page
 
 Notes:
-- Selection text is capped to 2000 chars per request for latency and reliability.
+- Selection text is capped for reliability (currently ~1200 chars per request).
 - Configure `ELEVENLABS_API_KEY` in `.env` (or Replit Secrets) before using this feature.
+- If direct audio playback fails, GuardiaPass falls back to browser speech synthesis.
+
+### Extension Troubleshooting
+
+If the popup appears empty or autofill/read-aloud changes do not show up:
+
+1. Reload the extension in `chrome://extensions`.
+2. Keep the dashboard tab open and unlocked once.
+3. Re-open the popup (it requests a vault snapshot sync when cache is empty).
 
 ---
 
@@ -263,6 +281,7 @@ guardiapass/
 │   ├── geminiService.ts                # Gemini API calls + typosquatting detection
 │   ├── breachService.ts                # HIBP k-anonymity + AI breach intelligence
 │   ├── hunterService.ts                # Hunter.io email verification
+│   ├── localSecureDb.ts                # Encrypted IndexedDB persistence layer
 │   └── backboardService.ts            # Backboard.io AI memory assistant
 │
 ├── components/
@@ -298,11 +317,15 @@ guardiapass/
 ## Security Notes
 
 - **All vault passwords are encrypted at rest.** Credential passwords are AES-GCM-256 encrypted before being sent to the server. The backend stores ciphertext only — plaintext passwords only exist in browser memory during active use.
-- **Server-side API proxying.** All external API calls (Gemini, Hunter.io, Backboard.io, HIBP) go through the Express backend. API keys are never exposed to the client or embedded in the frontend bundle.
+- **Master key handling is hardened.** Login verification uses a stored verifier hash with runtime session key usage.
+- **Server-side API proxying.** External API calls (Gemini, Hunter.io, Backboard.io, HIBP, ElevenLabs) go through Express routes.
+- **CORS is allowlist-based** (configure with `ALLOWED_ORIGINS`) and default security headers are enabled.
+- **Rate limiting** is applied on sensitive API endpoints.
 - **Breach checks use k-anonymity.** Only a 5-character SHA-1 hash prefix is sent to HIBP. The full password hash never leaves the client.
 - **Re-encryption on password change.** All entries are decrypted with the old key, the master password is updated, then entries are re-encrypted. If the process is interrupted, recovery may require the old master password.
 - **PostgreSQL persistence.** Vault data is stored in PostgreSQL with proper indexing. The database stores only encrypted ciphertext for password fields.
 - **The Chrome extension uses no hardcoded secrets.** All AI processing is relayed through the dashboard tab where API routing is available.
+- **Autofill guardrails.** Domain-aware matching and improved selectors reduce incorrect fills.
 - **Biometric authentication uses WebAuthn/FIDO2.** Hardware-backed verification through the platform authenticator. Falls back gracefully if unavailable.
 
 ---
