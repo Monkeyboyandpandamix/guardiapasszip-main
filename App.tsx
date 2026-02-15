@@ -325,7 +325,13 @@ const App: React.FC = () => {
 
   if (session.isLocked) return <AuthGateway onUnlock={handleUnlock} />;
 
-  const activeColor = theme === 'forest' ? 'emerald' : theme === 'obsidian' ? 'amber' : theme === 'neon' ? 'pink' : 'sky';
+  const activeColor =
+    theme === 'forest' ? 'emerald' :
+    theme === 'obsidian' ? 'amber' :
+    theme === 'neon' ? 'pink' :
+    theme === 'midnight' ? 'blue' :
+    theme === 'sunset' ? 'orange' :
+    'sky';
 
   return (
     <div className={`flex flex-col lg:flex-row h-screen overflow-hidden text-slate-200 theme-${theme}`} style={{ backgroundColor: bgColor, fontSize: `${uiScale}%` }}>

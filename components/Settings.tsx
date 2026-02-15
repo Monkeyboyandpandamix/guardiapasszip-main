@@ -3,7 +3,7 @@ import { Palette, Shield, Save, RefreshCcw, Lock, Key, CheckCircle2, AlertTriang
 import { PasswordEntry } from '../types';
 import { encryptData, decryptData, changeMasterPassword, verifyMasterPassword } from '../services/cryptoService';
 
-export type AppTheme = 'forest' | 'obsidian' | 'neon' | 'arctic';
+export type AppTheme = 'forest' | 'obsidian' | 'neon' | 'arctic' | 'light' | 'midnight' | 'sunset';
 
 interface SettingsProps {
   currentTheme: AppTheme;
@@ -30,20 +30,41 @@ const Settings: React.FC<SettingsProps> = ({ currentTheme, setTheme, bgColor, se
     { id: 'forest', name: 'Midnight Forest', color: 'bg-emerald-500', desc: 'Secure environment profile' },
     { id: 'obsidian', name: 'Obsidian Gold', color: 'bg-amber-500', desc: 'Elite vault aesthetic' },
     { id: 'neon', name: 'Cyber Neon', color: 'bg-pink-500', desc: 'High-visibility threat layer' },
-    { id: 'arctic', name: 'Arctic Frost', color: 'bg-sky-500', desc: 'Minimalist clinical interface' }
+    { id: 'arctic', name: 'Arctic Frost', color: 'bg-sky-500', desc: 'Minimalist clinical interface' },
+    { id: 'light', name: 'Light Mode', color: 'bg-slate-200', desc: 'Bright high-contrast daytime mode' },
+    { id: 'midnight', name: 'Midnight Blue', color: 'bg-blue-500', desc: 'Dark premium blue palette' },
+    { id: 'sunset', name: 'Sunset Amber', color: 'bg-orange-500', desc: 'Warm dark mode with amber accents' }
   ];
 
   const bgColors = [
     { name: 'Deep Void', value: '#020617' },
     { name: 'Emerald Abyss', value: '#061a14' },
     { name: 'Obsidian Glow', value: '#1a1606' },
-    { name: 'Arctic Slate', value: '#0f172a' }
+    { name: 'Arctic Slate', value: '#0f172a' },
+    { name: 'Soft Light', value: '#f8fafc' },
+    { name: 'Paper White', value: '#ffffff' },
+    { name: 'Warm Sand', value: '#fff7ed' },
+    { name: 'Cool Mist', value: '#eef2ff' }
   ];
   const scaleOptions = [
     { label: 'Compact', value: 90 },
     { label: 'Default', value: 100 },
     { label: 'Large', value: 110 },
   ];
+
+  const applyThemePreset = (themeId: AppTheme) => {
+    setTheme(themeId);
+    const presetBg: Record<AppTheme, string> = {
+      forest: '#061a14',
+      obsidian: '#1a1606',
+      neon: '#1a1027',
+      arctic: '#0f172a',
+      light: '#f8fafc',
+      midnight: '#0b1220',
+      sunset: '#1f1308',
+    };
+    setBgColor(presetBg[themeId]);
+  };
 
   const handlePasswordChange = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -129,7 +150,7 @@ const Settings: React.FC<SettingsProps> = ({ currentTheme, setTheme, bgColor, se
           <div className="space-y-8">
             <div className="grid grid-cols-2 gap-4">
               {themes.map((t) => (
-                <button key={t.id} onClick={() => setTheme(t.id)} className={`p-6 rounded-[2rem] border transition-all text-left ${currentTheme === t.id ? 'border-indigo-500 bg-indigo-500/10' : 'border-white/5 bg-slate-950/40'}`}>
+                <button key={t.id} onClick={() => applyThemePreset(t.id)} className={`p-6 rounded-[2rem] border transition-all text-left ${currentTheme === t.id ? 'border-indigo-500 bg-indigo-500/10' : 'border-white/5 bg-slate-950/40'}`}>
                   <div className={`w-3 h-3 rounded-full mb-4 ${t.color}`} />
                   <h4 className="font-black text-white text-sm uppercase mb-1">{t.name}</h4>
                   <p className="text-[10px] text-slate-500">{t.desc}</p>

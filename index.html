@@ -8,10 +8,16 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
+        :root {
+            --gp-text-primary: #f8fafc;
+            --gp-text-muted: #cbd5e1;
+            --gp-text-subtle: #94a3b8;
+            --gp-focus-ring: rgba(56, 189, 248, 0.6);
+        }
         body {
             font-family: 'Inter', sans-serif;
             background-color: #020617;
-            color: #f8fafc;
+            color: var(--gp-text-primary);
         }
         .glass-panel {
             background: rgba(15, 23, 42, 0.7);
@@ -36,6 +42,61 @@
         }
         .forest-gradient {
             background: linear-gradient(135deg, #022c22 0%, #020617 100%);
+        }
+        .theme-light {
+            color: #0f172a !important;
+        }
+        .theme-light .glass-panel {
+            background: rgba(255, 255, 255, 0.9) !important;
+            border-color: rgba(15, 23, 42, 0.12) !important;
+            backdrop-filter: blur(8px);
+        }
+        .theme-light [class*="text-white"],
+        .theme-light [class*="text-slate-100"],
+        .theme-light [class*="text-slate-200"] {
+            color: #0f172a !important;
+        }
+        .theme-light [class*="text-slate-3"],
+        .theme-light [class*="text-slate-4"],
+        .theme-light [class*="text-slate-5"],
+        .theme-light [class*="text-slate-6"],
+        .theme-light [class*="text-slate-7"] {
+            color: #334155 !important;
+        }
+        .theme-light [class*="bg-black/"],
+        .theme-light [class*="bg-slate-9"] {
+            background-color: rgba(255, 255, 255, 0.86) !important;
+        }
+        .theme-light [class*="border-white/"] {
+            border-color: rgba(15, 23, 42, 0.12) !important;
+        }
+        .theme-light button[class*="bg-"]:not(:disabled) {
+            box-shadow: 0 8px 20px rgba(15, 23, 42, 0.16);
+            border-color: rgba(15, 23, 42, 0.18);
+        }
+
+        /* Improve low-contrast utility colors used across the app */
+        .text-slate-500 { color: var(--gp-text-muted) !important; }
+        .text-slate-600, .text-slate-700 { color: var(--gp-text-subtle) !important; }
+
+        /* Make interactive controls stand out and improve keyboard accessibility */
+        button {
+            transition: transform 0.16s ease, filter 0.16s ease, box-shadow 0.16s ease;
+        }
+        button[class*="bg-"]:not(:disabled) {
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            box-shadow: 0 10px 24px rgba(2, 6, 23, 0.35);
+        }
+        button[class*="bg-"]:not(:disabled):hover {
+            transform: translateY(-1px);
+            filter: brightness(1.06) saturate(1.05);
+        }
+        button:focus-visible,
+        input:focus-visible,
+        textarea:focus-visible,
+        select:focus-visible {
+            outline: none !important;
+            box-shadow: 0 0 0 2px rgba(2, 6, 23, 0.95), 0 0 0 4px var(--gp-focus-ring) !important;
         }
     </style>
 <script type="importmap">
