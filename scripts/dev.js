@@ -2,11 +2,12 @@ import { spawn } from 'node:child_process';
 
 const isWin = process.platform === 'win32';
 
-function startProcess(command, args, label, env = {}) {
-  const child = spawn(command, args, {
+function startProcess(command, label, env = {}) {
+  const child = spawn(command, {
     stdio: 'inherit',
     env: { ...process.env, ...env },
-    shell: false,
+    shell: true,
+    windowsHide: false,
   });
 
   child.on('error', (err) => {
@@ -16,9 +17,11 @@ function startProcess(command, args, label, env = {}) {
   return child;
 }
 
-const server = startProcess(process.execPath, ['server/index.js'], 'server');
-const viteCmd = isWin ? 'npx.cmd' : 'npx';
-const client = startProcess(viteCmd, ['vite'], 'client');
+const npmCmd = isWin ? 'npm.cmd' : 'npm';
+const npxCmd = isWin ? 'npx.cmd' : 'npx';
+
+const server = startProcess(`${npmCmd} run server`, 'server');
+const client = startProcess(`${npxCmd} vite`, 'client');
 
 let shuttingDown = false;
 
