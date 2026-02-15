@@ -92,6 +92,24 @@ const cyberIntelCache = {
   updatedAt: 0,
   data: null,
 };
+const CYBER_INTEL_HEADERS = {
+  'User-Agent': 'GuardiaPass/1.0 (+local app)',
+  'Accept': 'application/json,text/csv,*/*',
+};
+const EMERGENCY_CVE_FALLBACK = [
+  {
+    cveId: 'CVE-2024-4577',
+    published: '2024-06-07T00:00:00.000Z',
+    lastModified: null,
+    description: 'PHP-CGI argument injection vulnerability (emergency fallback entry).',
+    severity: 'HIGH',
+    score: 9.8,
+    vector: '',
+    references: ['https://nvd.nist.gov/vuln/detail/CVE-2024-4577'],
+    exploitedInWild: true,
+    kev: null,
+  },
+];
 
 export function __setAIFactoryForTests(factory) {
   aiFactoryOverride = factory;
@@ -514,16 +532,39 @@ function getFetchImpl() {
   return fetchImplOverride || globalThis.fetch;
 }
 
-async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 12000) {
+async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 4500) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await getFetchImpl()(url, { ...options, signal: controller.signal });
+    const response = await getFetchImpl()(url, {
+      ...options,
+      headers: { ...CYBER_INTEL_HEADERS, ...(options.headers || {}) },
+      signal: controller.signal
+    });
     if (!response.ok) {
       const text = await response.text().catch(() => '');
       throw new Error(`Request failed (${response.status})${text ? `: ${text.slice(0, 180)}` : ''}`);
     }
     return await response.json();
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function fetchTextWithTimeout(url, options = {}, timeoutMs = 4500) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await getFetchImpl()(url, {
+      ...options,
+      headers: { ...CYBER_INTEL_HEADERS, ...(options.headers || {}) },
+      signal: controller.signal
+    });
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      throw new Error(`Request failed (${response.status})${text ? `: ${text.slice(0, 180)}` : ''}`);
+    }
+    return await response.text();
   } finally {
     clearTimeout(timeout);
   }
@@ -567,16 +608,58 @@ async function fetchNvdLatest() {
   return fetchJsonWithTimeout(nvdUrl.toString(), { headers: nvdHeaders });
 }
 
+function splitCsvLine(line) {
+  const out = [];
+  let cell = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        cell += '"';
+        i += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+    if (ch === ',' && !inQuotes) {
+      out.push(cell);
+      cell = '';
+      continue;
+    }
+    cell += ch;
+  }
+  out.push(cell);
+  return out.map((v) => v.replace(/^\uFEFF/, '').trim());
+}
+
+async function fetchCirclLatest() {
+  const payload = await fetchJsonWithTimeout('https://cve.circl.lu/api/last/30');
+  const rows = Array.isArray(payload) ? payload : [];
+  return rows.map((r) => ({
+    cveId: String(r?.id || '').toUpperCase(),
+    published: r?.Published || r?.published || null,
+    lastModified: r?.Modified || r?.last_modified || null,
+    description: String(r?.summary || r?.description || 'No description available.'),
+    severity: String(r?.cvss3 ? (r.cvss3 >= 9 ? 'CRITICAL' : r.cvss3 >= 7 ? 'HIGH' : r.cvss3 >= 4 ? 'MEDIUM' : 'LOW') : (r?.cvss ? (r.cvss >= 7 ? 'HIGH' : 'MEDIUM') : 'UNKNOWN')),
+    score: typeof r?.cvss3 === 'number' ? r.cvss3 : (typeof r?.cvss === 'number' ? r.cvss : null),
+    vector: '',
+    references: Array.isArray(r?.references) ? r.references.slice(0, 3) : [],
+    exploitedInWild: false,
+    kev: null,
+  })).filter((x) => x.cveId);
+}
+
 async function fetchKevCatalog() {
   try {
     return await fetchJsonWithTimeout('https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json');
   } catch (firstErr) {
-    const csvRes = await getFetchImpl()('https://www.cisa.gov/sites/default/files/csv/known_exploited_vulnerabilities.csv');
-    if (!csvRes.ok) throw firstErr;
-    const csvText = await csvRes.text();
+    const csvText = await fetchTextWithTimeout('https://www.cisa.gov/sites/default/files/csv/known_exploited_vulnerabilities.csv').catch(() => null);
+    if (!csvText) throw firstErr;
     const lines = csvText.split(/\r?\n/).filter(Boolean);
     if (lines.length < 2) throw firstErr;
-    const header = lines[0].split(',').map((h) => h.replace(/^"|"$/g, '').trim());
+    const header = splitCsvLine(lines[0]).map((h) => h.replace(/^"|"$/g, '').trim().replace(/^\uFEFF/, ''));
     const idx = (name) => header.findIndex((h) => h.toLowerCase() === name.toLowerCase());
     const cveIdx = idx('cveID');
     const vendorIdx = idx('vendorProject');
@@ -585,8 +668,9 @@ async function fetchKevCatalog() {
     const dateIdx = idx('dateAdded');
     const ransomIdx = idx('knownRansomwareCampaignUse');
     const descIdx = idx('shortDescription');
+    if (cveIdx < 0) throw firstErr;
     const rows = lines.slice(1).map((line) => {
-      const cols = line.split(',').map((v) => v.replace(/^"|"$/g, '').trim());
+      const cols = splitCsvLine(line).map((v) => v.replace(/^"|"$/g, '').trim());
       return {
         cveID: cols[cveIdx] || '',
         vendorProject: cols[vendorIdx] || '',
@@ -611,9 +695,10 @@ async function fetchCyberIntel(windowHours = 336) {
 
   let nvdPayload = nvdResult.status === 'fulfilled' ? nvdResult.value : null;
   const kevPayload = kevResult.status === 'fulfilled' ? kevResult.value : { vulnerabilities: [] };
+  const kevList = Array.isArray(kevPayload?.vulnerabilities) ? kevPayload.vulnerabilities : [];
 
   const firstNvdRows = Array.isArray(nvdPayload?.vulnerabilities) ? nvdPayload.vulnerabilities : [];
-  if (firstNvdRows.length === 0) {
+  if (firstNvdRows.length === 0 && kevList.length === 0) {
     try {
       const latest = await fetchNvdLatest();
       const latestRows = Array.isArray(latest?.vulnerabilities) ? latest.vulnerabilities : [];
@@ -623,11 +708,19 @@ async function fetchCyberIntel(windowHours = 336) {
     }
   }
 
-  if (!nvdPayload && kevResult.status === 'rejected') {
-    throw new Error(`NVD fetch failed (${nvdResult.reason?.message || 'unknown'}) and KEV fetch failed (${kevResult.reason?.message || 'unknown'})`);
+  let circlRows = [];
+  let circlError = null;
+  if (!nvdPayload && kevList.length === 0) {
+    try {
+      circlRows = await fetchCirclLatest();
+    } catch (e) {
+      circlError = e;
+    }
   }
 
-  const kevList = Array.isArray(kevPayload?.vulnerabilities) ? kevPayload.vulnerabilities : [];
+  if (!nvdPayload && kevList.length === 0 && circlRows.length === 0) {
+    throw new Error(`NVD failed (${nvdResult.reason?.message || 'unknown'}); KEV failed (${kevResult.reason?.message || 'unknown'}); CIRCL failed (${circlError?.message || 'unknown'})`);
+  }
   const kevByCve = new Map();
   for (const item of kevList) {
     const cveId = String(item?.cveID || '').trim().toUpperCase();
@@ -696,16 +789,39 @@ async function fetchCyberIntel(windowHours = 336) {
     .filter(Boolean)
     .slice(0, 20);
 
+  const mergedRows = [...cves.slice(0, 40), ...kevOnly];
+  const finalRows = mergedRows.length > 0 ? mergedRows : circlRows.slice(0, 30);
+  const withEmergencyFallback = finalRows.length > 0 ? finalRows : EMERGENCY_CVE_FALLBACK;
+
   return {
     updatedAt: Date.now(),
     sourceWindowHours: windowHours,
-    cves: [...cves.slice(0, 40), ...kevOnly],
+    cves: withEmergencyFallback,
     totalNvdItems: nvdRows.length,
     totalKevItems: kevList.length,
     sourceStatus: {
       nvd: nvdResult.status === 'fulfilled' ? 'ok' : 'degraded',
       kev: kevResult.status === 'fulfilled' ? 'ok' : 'degraded',
+      circl: circlRows.length > 0 ? 'ok' : 'degraded',
     },
+    sourceErrors: {
+      nvd: nvdResult.status === 'rejected' ? String(nvdResult.reason?.message || 'failed') : null,
+      kev: kevResult.status === 'rejected' ? String(kevResult.reason?.message || 'failed') : null,
+      circl: circlError ? String(circlError.message || 'failed') : null,
+    },
+  };
+}
+
+function buildEmergencyIntelPayload(message, windowHours = 336) {
+  return {
+    updatedAt: Date.now(),
+    sourceWindowHours: windowHours,
+    cves: EMERGENCY_CVE_FALLBACK,
+    totalNvdItems: 0,
+    totalKevItems: 0,
+    sourceStatus: { nvd: 'degraded', kev: 'degraded', circl: 'degraded' },
+    sourceErrors: { nvd: message, kev: message, circl: message },
+    warning: message,
   };
 }
 
@@ -1154,7 +1270,10 @@ app.get('/api/cyberacademy/cves', applyRateLimit('cyberacademy-cves', 60), async
   }
 
   try {
-    const intel = await fetchCyberIntel(windowHours);
+    const intel = await Promise.race([
+      fetchCyberIntel(windowHours),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Live intel fetch timeout')), 9000)),
+    ]);
     cyberIntelCache.data = intel;
     cyberIntelCache.updatedAt = Date.now();
     res.json({ ...intel, cache: { hit: false, stale: false, ttlMs: intel.cves.length === 0 ? CYBER_INTEL_EMPTY_CACHE_MS : CYBER_INTEL_CACHE_MS } });
@@ -1166,7 +1285,10 @@ app.get('/api/cyberacademy/cves', applyRateLimit('cyberacademy-cves', 60), async
         warning: `Live refresh failed; showing cached results. ${err.message}`,
       });
     }
-    res.status(502).json({ error: `Unable to fetch live cyber intel: ${err.message}` });
+    const fallback = buildEmergencyIntelPayload(`Live refresh unavailable; showing emergency intel. ${err.message}`, windowHours);
+    cyberIntelCache.data = fallback;
+    cyberIntelCache.updatedAt = Date.now();
+    res.json({ ...fallback, cache: { hit: false, stale: false, ttlMs: CYBER_INTEL_EMPTY_CACHE_MS } });
   }
 });
 

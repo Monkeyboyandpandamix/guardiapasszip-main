@@ -47,6 +47,8 @@ interface CyberIntelPayload {
   totalKevItems: number;
   cache?: { hit: boolean; stale: boolean; ttlMs: number };
   warning?: string;
+  sourceStatus?: { nvd?: string; kev?: string; circl?: string };
+  sourceErrors?: { nvd?: string | null; kev?: string | null; circl?: string | null };
 }
 
 const categories: Category[] = [
@@ -328,6 +330,18 @@ const severityClass = (severity: string) => {
   if (s.includes('LOW')) return 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20';
   if (s.includes('KNOWN-EXPLOITED')) return 'bg-fuchsia-500/10 text-fuchsia-400 border border-fuchsia-500/20';
   return 'bg-slate-500/10 text-slate-300 border border-white/10';
+};
+
+const withTimeout = async <T,>(promise: Promise<T>, ms = 15000): Promise<T> => {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  const timeoutPromise = new Promise<T>((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error('CVE feed timed out. Please try refresh again.')), ms);
+  });
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
 };
 
 const ScamSimulator: React.FC = () => {
@@ -653,9 +667,9 @@ const Education: React.FC = () => {
     setIntelLoading(true);
     setIntelError('');
     try {
-      let data = await cyberIntelApi.getRecentCves({ refresh: force, windowHours: 336 }) as CyberIntelPayload;
+      let data = await withTimeout(cyberIntelApi.getRecentCves({ refresh: force, windowHours: 336 }) as Promise<CyberIntelPayload>, 18000);
       if ((!data?.cves || data.cves.length === 0) && !force) {
-        data = await cyberIntelApi.getRecentCves({ refresh: true, windowHours: 720 }) as CyberIntelPayload;
+        data = await withTimeout(cyberIntelApi.getRecentCves({ refresh: true, windowHours: 720 }) as Promise<CyberIntelPayload>, 18000);
       }
       setIntel(data);
     } catch (err) {
@@ -819,11 +833,46 @@ const Education: React.FC = () => {
               </div>
             </div>
 
+            <div className="flex flex-wrap gap-2">
+              <a
+                href="https://nvd.nist.gov/vuln/search"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-3 py-2 rounded-xl border border-sky-500/20 bg-sky-500/10 text-sky-300 text-[10px] font-black uppercase tracking-wider hover:bg-sky-500/20"
+              >
+                Open NVD
+              </a>
+              <a
+                href="https://www.cisa.gov/known-exploited-vulnerabilities-catalog"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-3 py-2 rounded-xl border border-fuchsia-500/20 bg-fuchsia-500/10 text-fuchsia-300 text-[10px] font-black uppercase tracking-wider hover:bg-fuchsia-500/20"
+              >
+                Open CISA KEV
+              </a>
+              <a
+                href="https://cve.circl.lu/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-3 py-2 rounded-xl border border-emerald-500/20 bg-emerald-500/10 text-emerald-300 text-[10px] font-black uppercase tracking-wider hover:bg-emerald-500/20"
+              >
+                Open CIRCL Feed
+              </a>
+            </div>
+
             {intelError && (
               <div className="p-4 rounded-2xl border border-red-500/20 bg-red-500/10 text-xs text-red-300">{intelError}</div>
             )}
             {intel?.warning && !intelError && (
               <div className="p-4 rounded-2xl border border-amber-500/20 bg-amber-500/10 text-xs text-amber-300">{intel.warning}</div>
+            )}
+            {!intelError && intel?.sourceStatus && (
+              <div className="p-4 rounded-2xl border border-white/10 bg-slate-950/40 text-[11px] text-slate-400">
+                Sources:
+                <span className="ml-2">NVD: <span className={intel.sourceStatus.nvd === 'ok' ? 'text-emerald-400' : 'text-amber-300'}>{intel.sourceStatus.nvd || 'unknown'}</span></span>
+                <span className="ml-3">CISA KEV: <span className={intel.sourceStatus.kev === 'ok' ? 'text-emerald-400' : 'text-amber-300'}>{intel.sourceStatus.kev || 'unknown'}</span></span>
+                <span className="ml-3">CIRCL: <span className={intel.sourceStatus.circl === 'ok' ? 'text-emerald-400' : 'text-amber-300'}>{intel.sourceStatus.circl || 'unknown'}</span></span>
+              </div>
             )}
             {!intelError && intel && (!intel.cves || intel.cves.length === 0) && (
               <div className="p-4 rounded-2xl border border-amber-500/20 bg-amber-500/10 text-xs text-amber-300">
