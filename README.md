@@ -134,7 +134,7 @@ GuardiaPass uses a full-stack architecture with server-side API proxying. API ke
 ### Prerequisites
 
 - Node.js 18+ and npm
-- PostgreSQL database (provided automatically on Replit)
+- PostgreSQL is optional (used only if you explicitly configure server-side persistence)
 
 ### 1. Install Dependencies
 
@@ -152,12 +152,16 @@ npm install
 **Optional API keys** (add as Secrets on Replit):
 - `HUNTER_API_KEY` — Hunter.io API key for email verification
 - `BACKBOARD_API_KEY` — Backboard.io API key for AI Advisor memory
+- `ELEVENLABS_API_KEY` — ElevenLabs key for browser "Read Aloud" (right-click selected text)
 
 **Outside Replit**: Set these environment variables manually:
 ```
 GOOGLE_API_KEY=your_gemini_api_key
 HUNTER_API_KEY=your_hunter_io_api_key
 BACKBOARD_API_KEY=your_backboard_io_api_key
+ELEVENLABS_API_KEY=your_elevenlabs_api_key
+ELEVENLABS_VOICE_ID=optional_voice_id
+ELEVENLABS_MODEL_ID=optional_model_id
 DATABASE_URL=your_postgresql_connection_string
 ```
 
@@ -183,7 +187,7 @@ npm run server
 
 Express serves the Vite build from `dist/` on port 5000.
 
-### 5. Run Database Migration (Optional but Recommended)
+### 5. Run Database Migration (Optional, Server-Side Only)
 
 If you upgraded from an older version, run:
 
@@ -191,7 +195,15 @@ If you upgraded from an older version, run:
 npm run migrate
 ```
 
-This backfills `vault_identities.password_cipher` so identity passwords are persisted safely.
+This backfills `vault_identities.password_cipher` so identity passwords are persisted safely for server-backed setups.
+
+---
+
+## Storage Model (Current)
+
+- Vault passwords, identities, visits, and hidden photos are now stored **securely on-device** in an encrypted IndexedDB store.
+- Hidden photos are encrypted before persistence, then stored as encrypted payloads locally.
+- Server DB remains optional for compatibility, but local encrypted storage is the default data path.
 
 ---
 
@@ -210,6 +222,16 @@ This backfills `vault_identities.password_cipher` so identity passwords are pers
 
 The extension requires the dashboard to be open in a tab for AI features. If it is not open, the extension will automatically open it in the background when needed.
 
+### Extension Read Aloud (ElevenLabs)
+
+1. Highlight text on any web page
+2. Right-click and choose **Read Aloud with GuardiaPass**
+3. The extension sends the selected text to the local `/api/tts/elevenlabs` endpoint and plays generated audio in-page
+
+Notes:
+- Selection text is capped to 2000 chars per request for latency and reliability.
+- Configure `ELEVENLABS_API_KEY` in `.env` (or Replit Secrets) before using this feature.
+
 ---
 
 ## API Status
@@ -221,6 +243,7 @@ The `/api/status` endpoint reports which APIs are configured and available:
   "gemini": true,
   "hunter": true,
   "backboard": true,
+  "elevenlabs": true,
   "database": true
 }
 ```

@@ -217,6 +217,12 @@ const AIAdvisor: React.FC<AIAdvisorProps> = ({ pageContext }) => {
     initSession();
   };
 
+  const handleDeleteConversation = () => {
+    const confirmed = window.confirm('Delete this conversation and clear all advisor history?');
+    if (!confirmed || isLoading) return;
+    handleClearAll();
+  };
+
   const formatMessage = (content: string) => {
     return content.split('\n').map((line, i) => {
       if (line.startsWith('# ')) {
@@ -295,14 +301,23 @@ const AIAdvisor: React.FC<AIAdvisorProps> = ({ pageContext }) => {
               <RotateCcw className="w-4 h-4" />
             </button>
             <button
-              onClick={handleClearAll}
+              onClick={handleDeleteConversation}
               disabled={isLoading}
               className="p-2.5 text-slate-500 hover:text-red-400 transition-all rounded-xl hover:bg-white/5 disabled:opacity-50"
-              title="Reset everything"
+              title="Delete conversation"
             >
               <Trash2 className="w-4 h-4" />
             </button>
           </div>
+        </div>
+        <div className="mb-4">
+          <button
+            onClick={handleDeleteConversation}
+            disabled={isLoading}
+            className="w-full px-4 py-2.5 rounded-xl border border-red-500/20 bg-red-500/10 text-red-400 text-[10px] font-black uppercase tracking-[0.2em] hover:bg-red-500/20 transition-all disabled:opacity-40"
+          >
+            Delete Conversation
+          </button>
         </div>
 
         <div className="mb-4 p-3 rounded-2xl bg-slate-900/50 border border-white/5">

@@ -21,11 +21,30 @@ import { vaultApi, visitsApi } from './services/api';
 import { demoMode } from './services/demoMode';
 import { DEMO_PASSWORDS, DEMO_IDENTITIES, DEMO_VISITS } from './services/demoData';
 
+const IN_MEMORY_VISIT_LIMIT = 10000;
+
+const mergeRecentVisits = (incoming: VisitRecord[], existing: VisitRecord[], limit = IN_MEMORY_VISIT_LIMIT): VisitRecord[] => {
+  const merged = [...incoming, ...existing].sort((a, b) => b.timestamp - a.timestamp);
+  const deduped: VisitRecord[] = [];
+  const seen = new Set<string>();
+  for (const visit of merged) {
+    if (seen.has(visit.id)) continue;
+    seen.add(visit.id);
+    deduped.push(visit);
+    if (deduped.length >= limit) break;
+  }
+  return deduped;
+};
+
 const App: React.FC = () => {
   const [session, setSession] = useState<SessionState>({ isLocked: true, userEmail: null, lastActive: Date.now() });
   const [activeSection, setActiveSection] = useState<AppSection>(AppSection.Vault);
   const [theme, setTheme] = useState<AppTheme>(() => (localStorage.getItem('gp_theme') as AppTheme) || 'forest');
   const [bgColor, setBgColor] = useState(() => localStorage.getItem('gp_bg_color') || '#020617');
+  const [uiScale, setUiScale] = useState<number>(() => {
+    const raw = Number(localStorage.getItem('gp_ui_scale') || '100');
+    return [90, 100, 110].includes(raw) ? raw : 100;
+  });
   
   const [passwords, setPasswords] = useState<PasswordEntry[]>([]);
   const [identities, setIdentities] = useState<IdentityEntry[]>([]);
@@ -39,6 +58,7 @@ const App: React.FC = () => {
   const [isDemoActive, setIsDemoActive] = useState(false);
   
   const lastHeartbeat = useRef<number>(Date.now());
+  const pendingVisitBatchRef = useRef<VisitRecord[]>([]);
 
   const addLog = useCallback((msg: string, type: 'in' | 'out' | 'sys' = 'sys', traceId?: string) => {
     setDebugLogs(prev => [{ 
@@ -70,6 +90,17 @@ const App: React.FC = () => {
       loadFromDB(session.userEmail);
     }
   }, [session.isLocked, session.userEmail, loadFromDB]);
+
+  useEffect(() => {
+    if (session.isLocked || !session.userEmail || pendingVisitBatchRef.current.length === 0) return;
+    const queued = [...pendingVisitBatchRef.current];
+    pendingVisitBatchRef.current = [];
+    visitsApi.saveBatch(queued, session.userEmail).catch((err) => {
+      console.error('Failed to flush queued visits:', err);
+      pendingVisitBatchRef.current = mergeRecentVisits(queued, pendingVisitBatchRef.current);
+      addLog(`Telemetry: Failed to flush ${queued.length} queued packets`, 'sys');
+    });
+  }, [session.isLocked, session.userEmail, addLog]);
 
   useEffect(() => {
     const handleDemoShortcut = (e: KeyboardEvent) => {
@@ -108,6 +139,10 @@ const App: React.FC = () => {
     document.body.style.backgroundColor = bgColor;
   }, [bgColor]);
 
+  useEffect(() => {
+    localStorage.setItem('gp_ui_scale', String(uiScale));
+  }, [uiScale]);
+
   const syncToExtension = useCallback(() => {
     window.postMessage({ source: 'guardiapass_dashboard', type: 'VAULT_SYNC', payload: { passwords, identities } }, "*");
   }, [passwords, identities]);
@@ -134,12 +169,11 @@ const App: React.FC = () => {
 
     if (type === 'VISIT_BATCH') {
       const batch = Array.isArray(payload) ? payload : [payload];
-      setVisits(prev => {
-        const updated = [...batch, ...prev].slice(0, 500);
-        return updated;
-      });
-      if (session.userEmail) {
+      setVisits(prev => mergeRecentVisits(batch, prev));
+      if (!session.isLocked && session.userEmail) {
         visitsApi.saveBatch(batch, session.userEmail).catch(console.error);
+      } else {
+        pendingVisitBatchRef.current = mergeRecentVisits(batch, pendingVisitBatchRef.current);
       }
       addLog(`Telemetry: Received ${batch.length} packets`, 'in', traceId);
     }
@@ -251,7 +285,7 @@ const App: React.FC = () => {
       window.postMessage({ source: 'guardiapass_dashboard', type: 'CREDENTIAL_SAVED', traceId }, "*");
       addLog(`Vault: Credential saved for ${payload.url}`, 'out', traceId);
     }
-  }, [isExtensionActive, addLog, syncToExtension, chatHistories, session.userEmail]);
+  }, [isExtensionActive, addLog, syncToExtension, chatHistories, session.userEmail, session.isLocked]);
 
   useEffect(() => {
     window.addEventListener('message', handleBridgeMessages);
@@ -277,13 +311,13 @@ const App: React.FC = () => {
   const activeColor = theme === 'forest' ? 'emerald' : theme === 'obsidian' ? 'amber' : theme === 'neon' ? 'pink' : 'sky';
 
   return (
-    <div className={`flex flex-col lg:flex-row h-screen overflow-hidden text-slate-200 theme-${theme}`} style={{ backgroundColor: bgColor }}>
+    <div className={`flex flex-col lg:flex-row h-screen overflow-hidden text-slate-200 theme-${theme}`} style={{ backgroundColor: bgColor, fontSize: `${uiScale}%` }}>
       <Sidebar activeSection={activeSection} setActiveSection={setActiveSection} isSecure={isExtensionActive} activeColor={activeColor} />
       <main className="flex-1 flex flex-col min-w-0 h-full relative">
-        <header className="h-16 shrink-0 border-b border-white/5 flex items-center justify-between px-8 bg-black/20 backdrop-blur-xl z-30">
+        <header className="h-16 shrink-0 border-b border-white/5 flex items-center justify-between px-4 sm:px-8 bg-black/20 backdrop-blur-xl z-30">
           <div className="flex items-center gap-3">
              <div className={`w-2 h-2 rounded-full ${isExtensionActive ? `bg-${activeColor}-500 shadow-[0_0_10px_#10b981]` : 'bg-slate-700'}`} />
-             <span className="text-[10px] font-black uppercase tracking-[0.4em] text-slate-500">
+             <span className="hidden sm:inline text-[10px] font-black uppercase tracking-[0.4em] text-slate-500">
                {isExtensionActive ? 'Uplink Synchronized' : 'Searching for Signal...'}
              </span>
              {isDemoActive && (
@@ -313,7 +347,18 @@ const App: React.FC = () => {
           {activeSection === AppSection.AIAdvisor && <AIAdvisor pageContext={advisorPageContext} />}
           {activeSection === AppSection.Education && <Education />}
           {activeSection === AppSection.Download && <DownloadPage />}
-          {activeSection === AppSection.Settings && <Settings currentTheme={theme} setTheme={setTheme} bgColor={bgColor} setBgColor={setBgColor} passwords={passwords} setPasswords={setPasswords} />}
+          {activeSection === AppSection.Settings && (
+            <Settings
+              currentTheme={theme}
+              setTheme={setTheme}
+              bgColor={bgColor}
+              setBgColor={setBgColor}
+              uiScale={uiScale}
+              setUiScale={setUiScale}
+              passwords={passwords}
+              setPasswords={setPasswords}
+            />
+          )}
         </div>
 
         {activeSection === AppSection.Verifier && (

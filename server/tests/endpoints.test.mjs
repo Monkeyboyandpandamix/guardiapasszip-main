@@ -5,6 +5,7 @@ import { Readable } from 'node:stream';
 
 process.env.GUARDIAPASS_DISABLE_AUTOSTART = '1';
 process.env.NODE_ENV = 'test';
+process.env.ELEVENLABS_API_KEY = 'test-elevenlabs-key';
 
 const { app, __setAIFactoryForTests, __setFetchForTests } = await import('../index.js');
 
@@ -59,6 +60,10 @@ __setFetchForTests(async (url) => {
   const asString = String(url);
   if (asString.includes('api.pwnedpasswords.com/range/12345')) {
     return new Response('ABCDEF:42\n', { status: 200 });
+  }
+  if (asString.includes('api.elevenlabs.io/v1/text-to-speech/')) {
+    const bytes = new Uint8Array([1, 2, 3, 4, 5, 6]);
+    return new Response(bytes, { status: 200, headers: { 'Content-Type': 'audio/mpeg' } });
   }
   return new Response(JSON.stringify({ data: {} }), {
     status: 200,
@@ -119,6 +124,20 @@ test('POST /api/ai/chat returns 500 when provider fails', async () => {
   assert.equal(response.statusCode, 500);
   assert.match(response.body.error, /AI chat failed/i);
   __setAIFactoryForTests(async () => ({ ai: mockAi, Type }));
+});
+
+test('POST /api/tts/elevenlabs validates text payload', async () => {
+  const response = await invokeJson('POST', '/api/tts/elevenlabs', { text: '' });
+  assert.equal(response.statusCode, 400);
+  assert.match(response.body.error, /Text is required/i);
+});
+
+test('POST /api/tts/elevenlabs returns base64 audio payload', async () => {
+  const response = await invokeJson('POST', '/api/tts/elevenlabs', { text: 'Read this sample text aloud.' });
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.body.mimeType, 'audio/mpeg');
+  assert.equal(typeof response.body.audioBase64, 'string');
+  assert.ok(response.body.audioBase64.length > 0);
 });
 
 function invokeJson(method, url, body) {

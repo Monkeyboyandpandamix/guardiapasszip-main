@@ -3,8 +3,18 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { PasswordEntry, IdentityEntry, AddressSuggestion, HiddenPhotoEntry } from '../types';
 import { Plus, Search, Trash2, X, MapPin, Lock, Loader2, RefreshCw, Globe, Image as ImageIcon, Eye, Download } from 'lucide-react';
 import { encryptData, decryptData } from '../services/cryptoService';
-import { suggestAddresses, analyzePasswordStrength, generateNeuralPassphrase } from '../services/geminiService';
+import { suggestAddresses, analyzePasswordStrength, generateNeuralPassphrase, generateLocalStrongPassword } from '../services/geminiService';
 import { vaultApi } from '../services/api';
+
+const COMMON_WEAK_PASSWORDS = new Set([
+  '123456', '1234567', '12345678', '12334567', '123456789', '1234567890',
+  'password', 'password123', 'qwerty', 'qwerty123', 'letmein', 'admin', 'welcome'
+]);
+
+const parseAddressParts = (rawAddress: string) =>
+  rawAddress
+    .trim()
+    .match(/^\s*(.+?),\s*([^,]+),\s*([A-Z]{2})\s*(\d{5}(?:-\d{4})?)?(?:,\s*(.+))?\s*$/i);
 
 const Vault: React.FC<{
   passwords: PasswordEntry[];
@@ -28,39 +38,82 @@ const Vault: React.FC<{
   const [isGenerating, setIsGenerating] = useState(false);
   const [isPhotoEncrypting, setIsPhotoEncrypting] = useState(false);
   const [genTheme, setGenTheme] = useState('Cyberpunk');
+  const [passwordSuggestions, setPasswordSuggestions] = useState<string[]>([]);
+
+  const getPasswordStrength = (value?: string) => {
+    const password = String(value || '').trim();
+    if (!password) return { label: 'Empty', color: 'text-slate-500', score: 0 };
+    const lower = password.toLowerCase();
+    if (COMMON_WEAK_PASSWORDS.has(lower)) return { label: 'Weak (common password)', color: 'text-red-400', score: 0 };
+    let score = 0;
+    if (password.length >= 8) score += 20;
+    if (password.length >= 12) score += 20;
+    if (password.length >= 16) score += 20;
+    if (/[a-z]/.test(password)) score += 10;
+    if (/[A-Z]/.test(password)) score += 10;
+    if (/\d/.test(password)) score += 10;
+    if (/[^A-Za-z0-9]/.test(password)) score += 10;
+    if (score <= 40) return { label: 'Weak', color: 'text-red-400', score };
+    if (score <= 70) return { label: 'Medium', color: 'text-amber-400', score };
+    return { label: 'Strong', color: 'text-emerald-400', score };
+  };
 
   useEffect(() => {
-    if (view === 'identities' && newIdentity.address.length > 5) {
+    if (view === 'identities' && newIdentity.address.trim().length >= 3) {
+      let cancelled = false;
       const timer = setTimeout(async () => {
         try {
           setIsSuggesting(true);
-          const results = await suggestAddresses(newIdentity.address);
-          setAddressSuggestions(results.slice(0, 5));
+          const query = newIdentity.address.trim();
+          const results = await suggestAddresses(query);
+          if (cancelled) return;
+          setAddressSuggestions(
+            results
+              .filter((item, idx, arr) => arr.findIndex((x) => x.address === item.address) === idx)
+              .slice(0, 5)
+          );
         } catch {
+          if (cancelled) return;
           setAddressSuggestions([]);
         } finally {
+          if (cancelled) return;
           setIsSuggesting(false);
         }
-      }, 1500);
-      return () => clearTimeout(timer);
+      }, 450);
+      return () => {
+        cancelled = true;
+        clearTimeout(timer);
+      };
     }
     setAddressSuggestions([]);
   }, [newIdentity.address, view]);
 
   useEffect(() => {
-    const raw = localStorage.getItem('gp_hidden_photos');
-    if (!raw) return;
-    try {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) {
-        setHiddenPhotos(parsed);
-      }
-    } catch {}
-  }, []);
+    if (!isAdding || view === 'hiddenPhotos') return;
+    setPasswordSuggestions([
+      generateLocalStrongPassword(18),
+      generateLocalStrongPassword(20),
+      generateLocalStrongPassword(22),
+    ]);
+  }, [isAdding, view]);
 
   useEffect(() => {
-    localStorage.setItem('gp_hidden_photos', JSON.stringify(hiddenPhotos));
-  }, [hiddenPhotos]);
+    let mounted = true;
+    vaultApi.getHiddenPhotos(userEmail)
+      .then((photos) => {
+        if (mounted) setHiddenPhotos(Array.isArray(photos) ? photos : []);
+      })
+      .catch(() => {
+        if (mounted) setHiddenPhotos([]);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, [userEmail]);
+
+  useEffect(() => {
+    vaultApi.saveHiddenPhotos(userEmail, hiddenPhotos).catch(console.error);
+  }, [hiddenPhotos, userEmail]);
 
   const runAnalysis = async (id: string) => {
     setIsAnalyzing(true);
@@ -70,7 +123,7 @@ const Vault: React.FC<{
       if (decrypted) {
         const analysis = await analyzePasswordStrength(decrypted);
         setPasswords(prev => prev.map(p => p.id === id ? { ...p, securityAnalysis: analysis } : p));
-        vaultApi.updatePassword(id, { securityAnalysis: analysis }).catch(console.error);
+        vaultApi.updatePassword(id, { securityAnalysis: analysis, userEmail }).catch(console.error);
       }
     }
     setIsAnalyzing(false);
@@ -97,9 +150,27 @@ const Vault: React.FC<{
     }
   };
 
+  const applyPasswordSuggestion = (password: string) => {
+    if (view === 'passwords') {
+      setNewEntry(prev => ({ ...prev, password }));
+      return;
+    }
+    if (view === 'identities') {
+      setNewIdentity(prev => ({ ...prev, password }));
+    }
+  };
+
+  const refreshPasswordSuggestions = () => {
+    setPasswordSuggestions([
+      generateLocalStrongPassword(18),
+      generateLocalStrongPassword(20),
+      generateLocalStrongPassword(22),
+    ]);
+  };
+
   const applyAddressSuggestion = (address: string) => {
     const normalized = address.trim();
-    const parts = normalized.match(/^\s*(.+?),\s*([^,]+),\s*([A-Z]{2})\s*(\d{5}(?:-\d{4})?)?(?:,\s*(.+))?\s*$/i);
+    const parts = parseAddressParts(normalized);
     setNewIdentity(prev => {
       if (!parts) return { ...prev, address: normalized };
       const [, street, city, state, zip, country] = parts;
@@ -176,8 +247,25 @@ const Vault: React.FC<{
       setPasswords(prev => [...prev, entry]);
       vaultApi.savePassword({ ...entry, userEmail }).catch(console.error);
     } else if (view === 'identities') {
+      const rawAddress = newIdentity.address?.trim() || '';
+      const parsed = parseAddressParts(rawAddress);
+      const inferredLabel =
+        newIdentity.label.trim() ||
+        newIdentity.email.split('@')[0] ||
+        [newIdentity.firstName, newIdentity.lastName].filter(Boolean).join(' ').trim() ||
+        'Identity';
       const identityPassword = newIdentity.password?.trim() ? await encryptData(newIdentity.password.trim()) : '';
-      const entry: IdentityEntry = { ...newIdentity, id: Math.random().toString(36).substr(2, 9), password: identityPassword };
+      const entry: IdentityEntry = {
+        ...newIdentity,
+        id: Math.random().toString(36).substr(2, 9),
+        label: inferredLabel,
+        address: parsed ? (parsed[1] || rawAddress) : rawAddress,
+        city: newIdentity.city || (parsed ? parsed[2] || '' : ''),
+        state: (newIdentity.state || (parsed ? parsed[3] || '' : '')).toUpperCase(),
+        zipCode: newIdentity.zipCode || (parsed ? parsed[4] || '' : ''),
+        country: newIdentity.country || (parsed ? parsed[5] || '' : ''),
+        password: identityPassword
+      };
       setIdentities(prev => [...prev, entry]);
       vaultApi.saveIdentity({ ...entry, userEmail }).catch(console.error);
     }
@@ -186,13 +274,16 @@ const Vault: React.FC<{
 
   const handleDeletePassword = (id: string) => {
     setPasswords(prev => prev.filter(x => x.id !== id));
-    vaultApi.deletePassword(id).catch(console.error);
+    vaultApi.deletePassword(id, userEmail).catch(console.error);
   };
 
   const handleDeleteIdentity = (id: string) => {
     setIdentities(prev => prev.filter(x => x.id !== id));
-    vaultApi.deleteIdentity(id).catch(console.error);
+    vaultApi.deleteIdentity(id, userEmail).catch(console.error);
   };
+
+  const passwordStrength = getPasswordStrength(newEntry.password);
+  const identityPasswordStrength = getPasswordStrength(newIdentity.password);
 
   return (
     <div className="p-8 max-w-6xl mx-auto w-full pb-32">
@@ -290,16 +381,62 @@ const Vault: React.FC<{
                   <div className="flex gap-2">
                     <input required type="password" placeholder="Password" className="flex-1 bg-black/40 border border-white/5 p-4 rounded-2xl text-sm" value={newEntry.password} onChange={e => setNewEntry({...newEntry, password: e.target.value})}/>
                     <button type="button" onClick={handleAiGenerate} disabled={isGenerating} className="p-4 bg-indigo-600 rounded-2xl text-white font-black uppercase text-[10px]">{isGenerating ? '...' : 'AI'}</button>
+                    <button type="button" onClick={refreshPasswordSuggestions} className="p-4 bg-slate-700 rounded-2xl text-white font-black uppercase text-[10px]">New</button>
                   </div>
+                  <div className="px-3 py-2 rounded-xl border border-white/5 bg-black/20 inline-flex items-center gap-2">
+                    <span className="text-[10px] text-slate-500 uppercase tracking-wider">Strength</span>
+                    <span className={`text-[10px] font-black uppercase tracking-wider ${passwordStrength.color}`}>{passwordStrength.label}</span>
+                    <span className="text-[10px] text-slate-600 font-mono">({passwordStrength.score})</span>
+                  </div>
+                  {passwordSuggestions.length > 0 && (
+                    <div className="rounded-2xl border border-white/5 bg-black/30 p-3">
+                      <p className="text-[9px] text-slate-500 uppercase tracking-wider mb-2">Suggested Strong Passwords</p>
+                      <div className="flex flex-wrap gap-2">
+                        {passwordSuggestions.map((suggested, idx) => (
+                          <button
+                            key={`${suggested}-${idx}`}
+                            type="button"
+                            onClick={() => applyPasswordSuggestion(suggested)}
+                            className="px-3 py-2 rounded-xl text-[10px] font-mono bg-slate-800 text-slate-200 border border-slate-700 hover:border-indigo-500/40 hover:text-white transition-colors"
+                          >
+                            {suggested}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </>
               ) : (
                 <div className="space-y-4">
-                  <input required placeholder="Profile Label" className="w-full bg-black/40 border border-white/5 p-4 rounded-2xl text-sm" value={newIdentity.label} onChange={e => setNewIdentity({...newIdentity, label: e.target.value})}/>
-                  <input required placeholder="Email Address" className="w-full bg-black/40 border border-white/5 p-4 rounded-2xl text-sm" value={newIdentity.email} onChange={e => setNewIdentity({...newIdentity, email: e.target.value})}/>
+                  <input placeholder="Profile Label" className="w-full bg-black/40 border border-white/5 p-4 rounded-2xl text-sm" value={newIdentity.label} onChange={e => setNewIdentity({...newIdentity, label: e.target.value})}/>
+                  <input placeholder="Email Address" className="w-full bg-black/40 border border-white/5 p-4 rounded-2xl text-sm" value={newIdentity.email} onChange={e => setNewIdentity({...newIdentity, email: e.target.value})}/>
                   <div className="flex gap-2">
                     <input type="password" placeholder="Identity Password (optional)" className="flex-1 bg-black/40 border border-white/5 p-4 rounded-2xl text-sm" value={newIdentity.password || ''} onChange={e => setNewIdentity({...newIdentity, password: e.target.value})}/>
                     <button type="button" onClick={handleAiGenerate} disabled={isGenerating} className="p-4 bg-indigo-600 rounded-2xl text-white font-black uppercase text-[10px]">{isGenerating ? '...' : 'AI'}</button>
+                    <button type="button" onClick={refreshPasswordSuggestions} className="p-4 bg-slate-700 rounded-2xl text-white font-black uppercase text-[10px]">New</button>
                   </div>
+                  <div className="px-3 py-2 rounded-xl border border-white/5 bg-black/20 inline-flex items-center gap-2">
+                    <span className="text-[10px] text-slate-500 uppercase tracking-wider">Strength</span>
+                    <span className={`text-[10px] font-black uppercase tracking-wider ${identityPasswordStrength.color}`}>{identityPasswordStrength.label}</span>
+                    <span className="text-[10px] text-slate-600 font-mono">({identityPasswordStrength.score})</span>
+                  </div>
+                  {passwordSuggestions.length > 0 && (
+                    <div className="rounded-2xl border border-white/5 bg-black/30 p-3">
+                      <p className="text-[9px] text-slate-500 uppercase tracking-wider mb-2">Suggested Strong Passwords</p>
+                      <div className="flex flex-wrap gap-2">
+                        {passwordSuggestions.map((suggested, idx) => (
+                          <button
+                            key={`${suggested}-${idx}`}
+                            type="button"
+                            onClick={() => applyPasswordSuggestion(suggested)}
+                            className="px-3 py-2 rounded-xl text-[10px] font-mono bg-slate-800 text-slate-200 border border-slate-700 hover:border-indigo-500/40 hover:text-white transition-colors"
+                          >
+                            {suggested}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                   <input placeholder="Physical Address" className="w-full bg-black/40 border border-white/5 p-4 rounded-2xl text-sm" value={newIdentity.address} onChange={e => setNewIdentity({...newIdentity, address: e.target.value})}/>
                   {isSuggesting && <p className="text-[10px] text-slate-500 uppercase tracking-widest">Finding likely addresses...</p>}
                   {addressSuggestions.length > 0 && (

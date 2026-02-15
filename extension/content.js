@@ -1,4 +1,199 @@
 (function() {
+  let gpActiveAudio = null;
+  let gpPasswordMeterEl = null;
+  let gpPasswordMeterField = null;
+  let gpLastPasswordField = null;
+  let gpLastForm = null;
+  const COMMON_WEAK_PASSWORDS = new Set([
+    '123456', '1234567', '12345678', '12334567', '123456789', '1234567890',
+    'password', 'password123', 'qwerty', 'qwerty123', 'letmein', 'admin', 'welcome'
+  ]);
+
+  function getPasswordStrength(password) {
+    const value = String(password || '').trim();
+    if (!value) return { label: 'Empty', score: 0, color: '#64748b' };
+    const lower = value.toLowerCase();
+    if (COMMON_WEAK_PASSWORDS.has(lower)) return { label: 'Weak (common)', score: 0, color: '#f87171' };
+    let score = 0;
+    if (value.length >= 8) score += 20;
+    if (value.length >= 12) score += 20;
+    if (value.length >= 16) score += 20;
+    if (/[a-z]/.test(value)) score += 10;
+    if (/[A-Z]/.test(value)) score += 10;
+    if (/\d/.test(value)) score += 10;
+    if (/[^A-Za-z0-9]/.test(value)) score += 10;
+    if (score <= 40) return { label: 'Weak', score, color: '#f87171' };
+    if (score <= 70) return { label: 'Medium', score, color: '#fbbf24' };
+    return { label: 'Strong', score, color: '#34d399' };
+  }
+
+  function hidePasswordMeter() {
+    if (gpPasswordMeterEl) {
+      gpPasswordMeterEl.remove();
+      gpPasswordMeterEl = null;
+    }
+    gpPasswordMeterField = null;
+  }
+
+  function generateStrongPassword(length = 18) {
+    const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+    const lower = 'abcdefghijkmnopqrstuvwxyz';
+    const digits = '23456789';
+    const symbols = '!@#$%^&*()-_=+[]{}?';
+    const all = upper + lower + digits + symbols;
+    const bytes = new Uint32Array(Math.max(4, length));
+    crypto.getRandomValues(bytes);
+    const chars = [
+      upper[bytes[0] % upper.length],
+      lower[bytes[1] % lower.length],
+      digits[bytes[2] % digits.length],
+      symbols[bytes[3] % symbols.length]
+    ];
+    for (let i = 4; i < length; i++) {
+      chars.push(all[bytes[i] % all.length]);
+    }
+    for (let i = chars.length - 1; i > 0; i--) {
+      const j = bytes[i % bytes.length] % (i + 1);
+      const tmp = chars[i];
+      chars[i] = chars[j];
+      chars[j] = tmp;
+    }
+    return chars.join('');
+  }
+
+  function setInputValue(el, val) {
+    if (!el) return;
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+    if (setter) setter.call(el, val);
+    else el.value = val;
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  function applySuggestedPassword(form, primaryField, password) {
+    if (!primaryField) return;
+    setInputValue(primaryField, password);
+    const scope = form ? Array.from(form.querySelectorAll('input[type="password"]')) : [primaryField];
+    for (const field of scope) {
+      if (field === primaryField) continue;
+      const hint = `${field.name || ''} ${field.id || ''} ${field.autocomplete || ''}`.toLowerCase();
+      if (hint.includes('confirm') || hint.includes('new') || hint.includes('repeat') || field.value.length <= 2) {
+        setInputValue(field, password);
+      }
+    }
+    renderPasswordMeter(primaryField);
+  }
+
+  function renderPasswordMeter(field) {
+    if (!field || !field.isConnected) return hidePasswordMeter();
+    const strength = getPasswordStrength(field.value);
+    const rect = field.getBoundingClientRect();
+    if (!gpPasswordMeterEl) {
+      gpPasswordMeterEl = document.createElement('div');
+      gpPasswordMeterEl.id = 'gp-password-meter';
+      gpPasswordMeterEl.style.cssText = [
+        'position:fixed',
+        'z-index:2147483647',
+        'padding:4px 8px',
+        'border-radius:8px',
+        'font:700 10px -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif',
+        'background:rgba(2,6,23,0.95)',
+        'border:1px solid rgba(148,163,184,0.25)',
+        'box-shadow:0 8px 20px rgba(0,0,0,0.35)',
+        'pointer-events:none',
+      ].join(';');
+      document.body.appendChild(gpPasswordMeterEl);
+    }
+    gpPasswordMeterEl.textContent = `Password: ${strength.label} (${strength.score})`;
+    gpPasswordMeterEl.style.color = strength.color;
+    gpPasswordMeterEl.style.top = `${Math.max(8, rect.top - 26)}px`;
+    gpPasswordMeterEl.style.left = `${Math.min(window.innerWidth - 220, Math.max(8, rect.left))}px`;
+    gpPasswordMeterField = field;
+  }
+
+  function showTtsToast(message, isError = false) {
+    const existing = document.getElementById('gp-tts-toast');
+    if (existing) existing.remove();
+    const toast = document.createElement('div');
+    toast.id = 'gp-tts-toast';
+    toast.textContent = message;
+    toast.style.cssText = [
+      'position:fixed',
+      'right:16px',
+      'bottom:16px',
+      'z-index:2147483647',
+      'padding:10px 12px',
+      'border-radius:10px',
+      'font:600 12px -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif',
+      `background:${isError ? 'rgba(239,68,68,0.92)' : 'rgba(2,6,23,0.92)'}`,
+      `border:1px solid ${isError ? 'rgba(248,113,113,0.7)' : 'rgba(16,185,129,0.6)'}`,
+      `color:${isError ? '#fee2e2' : '#d1fae5'}`,
+      'box-shadow:0 8px 30px rgba(0,0,0,0.35)',
+      'max-width:360px',
+    ].join(';');
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 2600);
+  }
+
+  function speakWithBrowserTts(text) {
+    const phrase = String(text || '').trim();
+    if (!phrase || !('speechSynthesis' in window)) return false;
+    try {
+      window.speechSynthesis.cancel();
+      const utter = new SpeechSynthesisUtterance(phrase.slice(0, 280));
+      utter.rate = 1;
+      utter.pitch = 1;
+      window.speechSynthesis.speak(utter);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function base64ToBlob(base64, mimeType) {
+    const binary = atob(base64);
+    const len = binary.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
+    return new Blob([bytes], { type: mimeType || 'audio/mpeg' });
+  }
+
+  function playTtsAudio(payload) {
+    const audioBase64 = payload?.audioBase64;
+    if (!audioBase64) {
+      showTtsToast('No audio returned for Read Aloud.', true);
+      return;
+    }
+    const mimeType = payload?.mimeType || 'audio/mpeg';
+    if (gpActiveAudio) {
+      try {
+        gpActiveAudio.pause();
+      } catch (e) {}
+      gpActiveAudio = null;
+    }
+    const blob = base64ToBlob(audioBase64, mimeType);
+    const blobUrl = URL.createObjectURL(blob);
+    const audio = new Audio(blobUrl);
+    gpActiveAudio = audio;
+    audio.onended = () => {
+      URL.revokeObjectURL(blobUrl);
+      if (gpActiveAudio === audio) gpActiveAudio = null;
+    };
+    audio.onerror = () => {
+      URL.revokeObjectURL(blobUrl);
+      if (gpActiveAudio === audio) gpActiveAudio = null;
+      const fallbackSpoke = speakWithBrowserTts(payload?.text || '');
+      showTtsToast(fallbackSpoke ? 'Played with browser voice fallback.' : 'Unable to play generated audio.', !fallbackSpoke);
+    };
+    audio.play().then(() => {
+      showTtsToast('Reading selected text aloud...');
+    }).catch(() => {
+      URL.revokeObjectURL(blobUrl);
+      const fallbackSpoke = speakWithBrowserTts(payload?.text || '');
+      showTtsToast(fallbackSpoke ? 'Playback blocked, using browser voice.' : 'Playback blocked by browser on this page.', !fallbackSpoke);
+    });
+  }
+
   const isDashboard = document.documentElement.getAttribute('data-guardiapass-role') === 'dashboard' || 
                       document.title.includes("GuardiaPass");
 
@@ -358,6 +553,16 @@
   }
 
   chrome.runtime.onMessage.addListener((msg) => {
+    if (msg.type === 'PLAY_TTS_AUDIO') {
+      playTtsAudio(msg.payload);
+      return;
+    }
+
+    if (msg.type === 'TTS_ERROR') {
+      showTtsToast(msg?.payload?.message || 'Read Aloud failed.', true);
+      return;
+    }
+
     if (msg.type === 'AUTOFILL_EXECUTE_FINAL') {
       const { payload } = msg;
       const allInputs = Array.from(document.querySelectorAll('input'));
@@ -440,6 +645,9 @@
       }
 
       passField.addEventListener('blur', () => {
+        setTimeout(() => {
+          if (document.activeElement !== passField) hidePasswordMeter();
+        }, 50);
         if (passField.value.length >= 3) {
           const allInputs = form ? Array.from(form.querySelectorAll('input')) : Array.from(document.querySelectorAll('input'));
           const userField = findUsernameField(allInputs, passField);
@@ -453,6 +661,27 @@
           }
         }
       });
+
+      passField.addEventListener('focus', () => renderPasswordMeter(passField));
+      passField.addEventListener('input', () => {
+        gpLastPasswordField = passField;
+        gpLastForm = form || passField.closest('form') || null;
+        renderPasswordMeter(passField);
+      });
+      passField.addEventListener('change', () => {
+        if (passField.value.length >= 8 && !savePromptShown) {
+          const allInputs = form ? Array.from(form.querySelectorAll('input')) : Array.from(document.querySelectorAll('input'));
+          const userField = findUsernameField(allInputs, passField);
+          detectedCredentials = {
+            username: userField?.value || '',
+            password: passField.value,
+            url: location.hostname
+          };
+          gpLastPasswordField = passField;
+          gpLastForm = form || passField.closest('form') || null;
+          showSavePrompt();
+        }
+      });
     });
   }
 
@@ -462,8 +691,10 @@
 
     const username = userField?.value || '';
     const password = passField?.value || '';
+    gpLastPasswordField = passField;
+    gpLastForm = form || passField?.closest('form') || null;
     
-    if (username && password && !savePromptShown) {
+    if (password && !savePromptShown) {
       detectedCredentials = { username, password, url: location.hostname };
       showSavePrompt();
     }
@@ -485,11 +716,12 @@
           <button id="gp-save-close" style="background:none;border:none;color:#64748b;font-size:18px;cursor:pointer;padding:0 4px">×</button>
         </div>
         <div style="padding:20px">
-          <p style="font-size:13px;font-weight:700;color:#f1f5f9;margin:0 0 4px">Save this password?</p>
-          <p style="font-size:10px;color:#64748b;margin:0 0 16px;font-family:monospace">${detectedCredentials.username} @ ${detectedCredentials.url}</p>
-          <div style="display:flex;gap:8px">
-            <button id="gp-save-yes" style="flex:1;padding:12px;background:#10b981;color:white;border:none;border-radius:12px;font-size:11px;font-weight:800;cursor:pointer;letter-spacing:0.05em">SAVE TO VAULT</button>
-            <button id="gp-save-no" style="flex:1;padding:12px;background:#1e293b;color:#94a3b8;border:1px solid #334155;border-radius:12px;font-size:11px;font-weight:800;cursor:pointer">DISMISS</button>
+          <p style="font-size:13px;font-weight:700;color:#f1f5f9;margin:0 0 4px">Save password or use a stronger one?</p>
+          <p style="font-size:10px;color:#64748b;margin:0 0 16px;font-family:monospace">${detectedCredentials.username || 'unknown-user'} @ ${detectedCredentials.url}</p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button id="gp-save-yes" style="flex:1;padding:12px;background:#10b981;color:white;border:none;border-radius:12px;font-size:11px;font-weight:800;cursor:pointer;letter-spacing:0.05em;min-width:98px">SAVE TO VAULT</button>
+            <button id="gp-save-suggest" style="flex:1;padding:12px;background:#6366f1;color:white;border:none;border-radius:12px;font-size:11px;font-weight:800;cursor:pointer;letter-spacing:0.05em;min-width:98px">SUGGEST STRONG</button>
+            <button id="gp-save-no" style="flex:1;padding:12px;background:#1e293b;color:#94a3b8;border:1px solid #334155;border-radius:12px;font-size:11px;font-weight:800;cursor:pointer;min-width:98px">DISMISS</button>
           </div>
         </div>
       </div>
@@ -516,11 +748,33 @@
         setTimeout(() => { banner.remove(); savePromptShown = false; }, 1500);
       });
     };
+    const suggestBtn = document.getElementById('gp-save-suggest');
+    if (suggestBtn) {
+      suggestBtn.onclick = () => {
+        const generated = generateStrongPassword(18);
+        const active = document.activeElement;
+        const targetField = gpLastPasswordField || (active && active.tagName === 'INPUT' && active.type === 'password' ? active : null);
+        const targetForm = gpLastForm || (targetField && targetField.closest ? targetField.closest('form') : null);
+        applySuggestedPassword(targetForm, targetField, generated);
+        detectedCredentials.password = generated;
+        const statusEl = banner.querySelector('div > div:last-child');
+        if (statusEl) {
+          statusEl.innerHTML = '<p style="text-align:center;padding:8px;color:#818cf8;font-size:11px;font-weight:800">✓ STRONG PASSWORD APPLIED</p>';
+        }
+        setTimeout(() => { banner.remove(); savePromptShown = false; }, 1400);
+      };
+    }
   }
 
   detectPasswordFields();
   const observer = new MutationObserver(() => detectPasswordFields());
   observer.observe(document.body, { childList: true, subtree: true });
+  window.addEventListener('scroll', () => {
+    if (gpPasswordMeterField) renderPasswordMeter(gpPasswordMeterField);
+  }, { passive: true });
+  window.addEventListener('resize', () => {
+    if (gpPasswordMeterField) renderPasswordMeter(gpPasswordMeterField);
+  });
 
   function injectScout() {
     if (document.getElementById('gp-scout')) return;

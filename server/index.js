@@ -45,6 +45,9 @@ const GEMINI_API_KEY = process.env.AI_INTEGRATIONS_GEMINI_API_KEY || process.env
 const GEMINI_BASE_URL = process.env.AI_INTEGRATIONS_GEMINI_BASE_URL || undefined;
 const HUNTER_API_KEY = process.env.HUNTER_API_KEY || '';
 const BACKBOARD_API_KEY = process.env.BACKBOARD_API_KEY || '';
+const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY || '';
+const ELEVENLABS_VOICE_ID = process.env.ELEVENLABS_VOICE_ID || 'EXAVITQu4vr4xnSDxMaL';
+const ELEVENLABS_MODEL_ID = process.env.ELEVENLABS_MODEL_ID || 'eleven_multilingual_v2';
 let aiFactoryOverride = null;
 let fetchImplOverride = null;
 
@@ -258,6 +261,7 @@ app.get('/api/status', (req, res) => {
     gemini: !!GEMINI_API_KEY,
     hunter: !!HUNTER_API_KEY,
     backboard: !!BACKBOARD_API_KEY,
+    elevenlabs: !!ELEVENLABS_API_KEY,
     database: dbAvailable,
   });
 });
@@ -825,6 +829,62 @@ app.post('/api/hunter/verify', async (req, res) => {
   }
 });
 
+app.post('/api/tts/elevenlabs', async (req, res) => {
+  try {
+    if (!ELEVENLABS_API_KEY) {
+      return res.status(503).json({ error: 'ElevenLabs API key is not configured.' });
+    }
+    const text = String(req.body?.text || '').trim();
+    if (!text) {
+      return res.status(400).json({ error: 'Text is required for TTS.' });
+    }
+    if (text.length > 2000) {
+      return res.status(400).json({ error: 'Text too long. Limit is 2000 characters.' });
+    }
+
+    const response = await getFetchImpl()(
+      `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(ELEVENLABS_VOICE_ID)}`,
+      {
+        method: 'POST',
+        headers: {
+          'xi-api-key': ELEVENLABS_API_KEY,
+          'Content-Type': 'application/json',
+          'Accept': 'audio/mpeg',
+        },
+        body: JSON.stringify({
+          text,
+          model_id: ELEVENLABS_MODEL_ID,
+          voice_settings: {
+            stability: 0.45,
+            similarity_boost: 0.75,
+            style: 0.2,
+            use_speaker_boost: true,
+          },
+        }),
+      }
+    );
+
+    if (!response.ok) {
+      const apiError = await response.text().catch(() => '');
+      throw new Error(`ElevenLabs API error ${response.status}${apiError ? `: ${apiError}` : ''}`);
+    }
+
+    const audioBuffer = Buffer.from(await response.arrayBuffer());
+    if (audioBuffer.length === 0) {
+      return res.status(502).json({ error: 'ElevenLabs returned empty audio.' });
+    }
+
+    res.json({
+      audioBase64: audioBuffer.toString('base64'),
+      mimeType: 'audio/mpeg',
+      voiceId: ELEVENLABS_VOICE_ID,
+      modelId: ELEVENLABS_MODEL_ID,
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'ElevenLabs TTS failed: ' + err.message });
+  }
+});
+
 app.post('/api/backboard/assistants', async (req, res) => {
   try {
     const response = await getFetchImpl()('https://app.backboard.io/api/assistants', {
@@ -890,7 +950,7 @@ if (process.env.GUARDIAPASS_DISABLE_AUTOSTART !== '1') {
     app.listen(PORT, '0.0.0.0', () => {
       console.log(`[GuardiaPass] Server running on port ${PORT}`);
       console.log(`[GuardiaPass] Database: ${dbAvailable ? 'connected' : 'unavailable (running without persistence)'}`);
-      console.log(`[GuardiaPass] API keys: Gemini=${GEMINI_API_KEY ? 'SET' : 'MISSING'}, Hunter=${HUNTER_API_KEY ? 'SET' : 'MISSING'}, Backboard=${BACKBOARD_API_KEY ? 'SET' : 'MISSING'}`);
+      console.log(`[GuardiaPass] API keys: Gemini=${GEMINI_API_KEY ? 'SET' : 'MISSING'}, Hunter=${HUNTER_API_KEY ? 'SET' : 'MISSING'}, Backboard=${BACKBOARD_API_KEY ? 'SET' : 'MISSING'}, ElevenLabs=${ELEVENLABS_API_KEY ? 'SET' : 'MISSING'}`);
     });
   });
 }

@@ -29,16 +29,16 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, setActiveSection, isSe
     <>
       <button 
         onClick={() => setIsOpen(!isOpen)}
-        className={`lg:hidden fixed bottom-6 right-6 z-[100] w-14 h-14 bg-${activeColor}-600 rounded-full flex items-center justify-center text-white shadow-2xl shadow-${activeColor}-500/40`}
+        className={`lg:hidden fixed bottom-5 right-5 z-[100] w-14 h-14 bg-${activeColor}-600 rounded-full flex items-center justify-center text-white shadow-2xl shadow-${activeColor}-500/40`}
       >
         {isOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
       </button>
 
       <aside className={`
-        fixed lg:static inset-y-0 left-0 z-50 w-64 bg-slate-950 border-r border-white/5 flex flex-col transition-transform duration-300 ease-in-out
+        fixed lg:static inset-y-0 left-0 z-50 w-[85vw] max-w-72 lg:w-64 bg-slate-950 border-r border-white/5 flex flex-col transition-transform duration-300 ease-in-out
         ${isOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
       `}>
-        <div className="p-8">
+        <div className="p-6 lg:p-8">
           <div className="mb-10 flex items-center gap-3">
              <div className={`p-2 bg-${activeColor}-500/20 rounded-xl border border-${activeColor}-500/30`}>
                <Shield className={`w-6 h-6 text-${activeColor}-400`} />

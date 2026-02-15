@@ -1,5 +1,7 @@
 let visitCache = [];
 const pendingRequests = new Map();
+const READ_ALOUD_MENU_ID = 'gp_read_aloud';
+const ELEVENLABS_ENDPOINT_PATH = '/api/tts/elevenlabs';
 
 const hunterQueue = [];
 const hunterPending = new Map();
@@ -44,6 +46,97 @@ async function processHunterQueue() {
 }
 
 let lastKnownDashUrl = null;
+
+function guessApiOrigins() {
+  const origins = [];
+  if (lastKnownDashUrl) {
+    try {
+      origins.push(new URL(lastKnownDashUrl).origin);
+    } catch (e) {}
+  }
+  origins.push('http://localhost:5000');
+  origins.push('http://localhost:3001');
+  origins.push('https://guardiapass.replit.app');
+  return Array.from(new Set(origins));
+}
+
+async function resolveApiOrigins() {
+  const origins = new Set(guessApiOrigins());
+  try {
+    const dash = await findDashboardTab();
+    if (dash?.url) {
+      origins.add(new URL(dash.url).origin);
+    }
+  } catch (e) {}
+  return Array.from(origins);
+}
+
+async function fetchTtsAudioBase64(text) {
+  const origins = await resolveApiOrigins();
+  let lastErr = null;
+  for (const origin of origins) {
+    try {
+      const response = await fetch(`${origin}${ELEVENLABS_ENDPOINT_PATH}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => '');
+        throw new Error(errorText || `TTS request failed (${response.status})`);
+      }
+      const payload = await response.json();
+      if (!payload?.audioBase64) throw new Error('Invalid TTS response payload');
+      return payload;
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  throw lastErr || new Error('No reachable API origin for TTS');
+}
+
+function ensureReadAloudMenu() {
+  chrome.contextMenus.removeAll(() => {
+    chrome.contextMenus.create({
+      id: READ_ALOUD_MENU_ID,
+      title: 'Read Aloud with GuardiaPass',
+      contexts: ['selection'],
+    });
+  });
+}
+
+ensureReadAloudMenu();
+
+chrome.runtime.onInstalled.addListener(() => {
+  ensureReadAloudMenu();
+});
+
+chrome.runtime.onStartup.addListener(() => {
+  ensureReadAloudMenu();
+});
+
+chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+  if (info.menuItemId !== READ_ALOUD_MENU_ID) return;
+  const selectedText = (info.selectionText || '').trim();
+  if (!selectedText || !tab?.id) return;
+
+  try {
+    const result = await fetchTtsAudioBase64(selectedText.slice(0, 1200));
+    chrome.tabs.sendMessage(tab.id, {
+      type: 'PLAY_TTS_AUDIO',
+      payload: {
+        audioBase64: result.audioBase64,
+        mimeType: result.mimeType || 'audio/mpeg',
+        text: selectedText.slice(0, 280),
+      },
+    }).catch(() => {});
+  } catch (err) {
+    chrome.tabs.sendMessage(tab.id, {
+      type: 'TTS_ERROR',
+      payload: { message: (err && err.message) ? err.message : 'Read Aloud failed.' },
+    }).catch(() => {});
+  }
+});
 
 async function findDashboardTab() {
   const tabs = await chrome.tabs.query({});

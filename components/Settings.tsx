@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Palette, Shield, Save, RefreshCcw, Lock, Key, CheckCircle2, AlertTriangle, Eye, EyeOff } from 'lucide-react';
 import { PasswordEntry } from '../types';
-import { encryptData, decryptData, changeMasterPassword } from '../services/cryptoService';
+import { encryptData, decryptData, changeMasterPassword, verifyMasterPassword } from '../services/cryptoService';
 
 export type AppTheme = 'forest' | 'obsidian' | 'neon' | 'arctic';
 
@@ -10,11 +10,13 @@ interface SettingsProps {
   setTheme: (theme: AppTheme) => void;
   bgColor: string;
   setBgColor: (color: string) => void;
+  uiScale: number;
+  setUiScale: (scale: number) => void;
   passwords: PasswordEntry[];
   setPasswords: React.Dispatch<React.SetStateAction<PasswordEntry[]>>;
 }
 
-const Settings: React.FC<SettingsProps> = ({ currentTheme, setTheme, bgColor, setBgColor, passwords, setPasswords }) => {
+const Settings: React.FC<SettingsProps> = ({ currentTheme, setTheme, bgColor, setBgColor, uiScale, setUiScale, passwords, setPasswords }) => {
   const [isSaved, setIsSaved] = useState(false);
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -37,13 +39,18 @@ const Settings: React.FC<SettingsProps> = ({ currentTheme, setTheme, bgColor, se
     { name: 'Obsidian Glow', value: '#1a1606' },
     { name: 'Arctic Slate', value: '#0f172a' }
   ];
+  const scaleOptions = [
+    { label: 'Compact', value: 90 },
+    { label: 'Default', value: 100 },
+    { label: 'Large', value: 110 },
+  ];
 
   const handlePasswordChange = async (e: React.FormEvent) => {
     e.preventDefault();
     setPasswordChangeError('');
 
-    const currentMaster = localStorage.getItem('guardiapass_master_pass') || 'admin123';
-    if (oldPassword !== currentMaster) {
+    const validCurrent = await verifyMasterPassword(oldPassword);
+    if (!validCurrent) {
       setPasswordChangeError('Current password is incorrect');
       return;
     }
@@ -135,6 +142,22 @@ const Settings: React.FC<SettingsProps> = ({ currentTheme, setTheme, bgColor, se
                 {bgColors.map(c => (
                   <button key={c.value} onClick={() => setBgColor(c.value)} className={`px-4 py-2 rounded-xl border text-[10px] font-black transition-all ${bgColor === c.value ? 'border-indigo-500 bg-indigo-500/10 text-white' : 'border-white/5 text-slate-500'}`}>
                     {c.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-4">Interface Scale</h4>
+              <div className="flex flex-wrap gap-3">
+                {scaleOptions.map((opt) => (
+                  <button
+                    key={opt.value}
+                    onClick={() => setUiScale(opt.value)}
+                    className={`px-4 py-2 rounded-xl border text-[10px] font-black transition-all ${
+                      uiScale === opt.value ? 'border-indigo-500 bg-indigo-500/10 text-white' : 'border-white/5 text-slate-500'
+                    }`}
+                  >
+                    {opt.label}
                   </button>
                 ))}
               </div>
