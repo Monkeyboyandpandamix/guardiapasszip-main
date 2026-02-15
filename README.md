@@ -161,6 +161,11 @@ BACKBOARD_API_KEY=your_backboard_io_api_key
 DATABASE_URL=your_postgresql_connection_string
 ```
 
+You can copy the template and fill it in:
+```bash
+cp .env.example .env
+```
+
 ### 3. Start the Development Server
 
 ```bash
@@ -173,10 +178,28 @@ The app runs on `http://localhost:5000`. The default master password is `admin12
 
 ```bash
 npm run build
-npm start
+npm run server
 ```
 
 Express serves the Vite build from `dist/` on port 5000.
+
+### 5. Run Database Migration (Optional but Recommended)
+
+If you upgraded from an older version, run:
+
+```bash
+npm run migrate
+```
+
+This backfills `vault_identities.password_cipher` so identity passwords are persisted safely.
+
+---
+
+## New Vault Features
+
+- **Identity Password AI Generation**: In the `Identities` add form, click `AI` next to password to generate a strong password.
+- **Address Auto-Suggestions**: While typing an address in `Identities`, likely addresses are suggested; selecting one auto-fills city/state/ZIP when possible.
+- **Hidden Photos (Encrypted)**: In the `Hidden Photos` vault tab, upload images to encrypt and store locally. You can view, download, or delete entries later.
 
 ### 5. Install the Chrome Extension
 

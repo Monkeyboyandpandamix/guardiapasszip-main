@@ -8,7 +8,8 @@
     "server": "node server/index.js",
     "build": "vite build",
     "preview": "vite preview",
-    "test:integration": "node --test server/tests/*.test.mjs"
+    "test:integration": "node --test server/tests/*.test.mjs",
+    "migrate": "node scripts/migrate.js"
   },
   "dependencies": {
     "@google/genai": "^1.41.0",
