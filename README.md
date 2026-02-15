@@ -187,6 +187,13 @@ npm run dev
 
 The app runs on `http://localhost:5000`. The default master password is `admin123` — change it immediately in Settings after first login.
 
+Convenience launchers:
+
+- **Windows**: run `start.bat`
+- **macOS/Linux**: run `./start.sh`
+
+Both scripts validate Node/npm, create `.env` from `.env.example` if missing, install dependencies if needed, then start the app.
+
 ### 4. Build for Production
 
 ```bash
