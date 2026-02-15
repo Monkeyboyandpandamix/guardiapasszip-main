@@ -1,0 +1,354 @@
+
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { AppSection, PasswordEntry, IdentityEntry, VisitRecord, SessionState } from './types';
+import Sidebar from './components/Sidebar';
+import Vault from './components/Vault';
+import Verifier from './components/Verifier';
+import BreachScanner from './components/BreachScanner';
+import Analytics from './components/Analytics';
+import DownloadPage from './components/Download';
+import Settings, { AppTheme } from './components/Settings';
+import AuthGateway from './components/AuthGateway';
+import NetworkMonitor from './components/NetworkMonitor';
+import ExtensionSimulator from './components/ExtensionSimulator';
+import Education from './components/Education';
+import AIAdvisor from './components/AIAdvisor';
+import { Lock, Terminal, X, Activity, FlaskConical } from 'lucide-react';
+import { askPageQuestion } from './services/geminiService';
+import { decryptData, encryptData } from './services/cryptoService';
+import { verifyEmail } from './services/hunterService';
+import { vaultApi, visitsApi } from './services/api';
+import { demoMode } from './services/demoMode';
+import { DEMO_PASSWORDS, DEMO_IDENTITIES, DEMO_VISITS } from './services/demoData';
+
+const App: React.FC = () => {
+  const [session, setSession] = useState<SessionState>({ isLocked: true, userEmail: null, lastActive: Date.now() });
+  const [activeSection, setActiveSection] = useState<AppSection>(AppSection.Vault);
+  const [theme, setTheme] = useState<AppTheme>(() => (localStorage.getItem('gp_theme') as AppTheme) || 'forest');
+  const [bgColor, setBgColor] = useState(() => localStorage.getItem('gp_bg_color') || '#020617');
+  
+  const [passwords, setPasswords] = useState<PasswordEntry[]>([]);
+  const [identities, setIdentities] = useState<IdentityEntry[]>([]);
+  const [visits, setVisits] = useState<VisitRecord[]>([]);
+  const [isExtensionActive, setIsExtensionActive] = useState(false);
+  const [debugLogs, setDebugLogs] = useState<{time: string, msg: string, type: 'in' | 'out' | 'sys', traceId?: string}[]>([]);
+  const [showDebug, setShowDebug] = useState(false);
+  const [chatHistories, setChatHistories] = useState<Record<string, { role: 'user' | 'model', text: string }[]>>({});
+  const [isLoaded, setIsLoaded] = useState(false);
+  const [advisorPageContext, setAdvisorPageContext] = useState<{ url: string; title: string; content: string } | null>(null);
+  const [isDemoActive, setIsDemoActive] = useState(false);
+  
+  const lastHeartbeat = useRef<number>(Date.now());
+
+  const addLog = useCallback((msg: string, type: 'in' | 'out' | 'sys' = 'sys', traceId?: string) => {
+    setDebugLogs(prev => [{ 
+      time: new Date().toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }), 
+      msg, type, traceId
+    }, ...prev].slice(0, 50));
+  }, []);
+
+  const loadFromDB = useCallback(async (email: string) => {
+    try {
+      const [dbPasswords, dbIdentities, dbVisits] = await Promise.all([
+        vaultApi.getPasswords(email),
+        vaultApi.getIdentities(email),
+        visitsApi.getVisits(email),
+      ]);
+      setPasswords(dbPasswords);
+      setIdentities(dbIdentities);
+      setVisits(dbVisits);
+      addLog(`Database: Loaded ${dbPasswords.length} passwords, ${dbIdentities.length} identities, ${dbVisits.length} visits`, 'sys');
+    } catch (err) {
+      console.error('Failed to load from DB:', err);
+      addLog('Database: Connection error — vault data may be unavailable', 'sys');
+    }
+    setIsLoaded(true);
+  }, [addLog]);
+
+  useEffect(() => {
+    if (!session.isLocked && session.userEmail) {
+      loadFromDB(session.userEmail);
+    }
+  }, [session.isLocked, session.userEmail, loadFromDB]);
+
+  useEffect(() => {
+    const handleDemoShortcut = (e: KeyboardEvent) => {
+      if (e.ctrlKey && e.shiftKey && e.key === 'D') {
+        e.preventDefault();
+        const nowActive = demoMode.toggle();
+        setIsDemoActive(nowActive);
+        if (nowActive) {
+          setPasswords(DEMO_PASSWORDS);
+          setIdentities(DEMO_IDENTITIES);
+          setVisits(DEMO_VISITS);
+          setIsExtensionActive(true);
+          setSession({ isLocked: false, userEmail: 'sarah.chen@gmail.com', lastActive: Date.now() });
+          setIsLoaded(true);
+          addLog('SIMULATION MODE ACTIVATED — All data is simulated for demonstration', 'sys');
+          addLog('Extension Bridge: Handshake established (simulated)', 'in');
+          addLog('Vault Sync: 8 passwords, 2 identities loaded', 'out');
+          addLog('Network Monitor: 32 visits captured, 6 threats diverted', 'sys');
+        } else {
+          setPasswords([]);
+          setIdentities([]);
+          setVisits([]);
+          setIsExtensionActive(false);
+          setIsLoaded(false);
+          setSession({ isLocked: true, userEmail: null, lastActive: Date.now() });
+          setDebugLogs([]);
+          addLog('SIMULATION MODE DEACTIVATED — Returning to live mode', 'sys');
+        }
+      }
+    };
+    window.addEventListener('keydown', handleDemoShortcut);
+    return () => window.removeEventListener('keydown', handleDemoShortcut);
+  }, [addLog]);
+
+  useEffect(() => {
+    document.body.style.backgroundColor = bgColor;
+  }, [bgColor]);
+
+  const syncToExtension = useCallback(() => {
+    window.postMessage({ source: 'guardiapass_dashboard', type: 'VAULT_SYNC', payload: { passwords, identities } }, "*");
+  }, [passwords, identities]);
+
+  useEffect(() => {
+    syncToExtension();
+  }, [syncToExtension]);
+
+  const handleBridgeMessages = useCallback(async (event: MessageEvent) => {
+    const data = event.data;
+    if (data?.source !== 'guardiapass_extension') return;
+
+    const { type, payload, correlationId, targetTabId, traceId } = data;
+
+    if (type === 'HEARTBEAT') {
+      lastHeartbeat.current = Date.now();
+      if (!isExtensionActive) {
+        setIsExtensionActive(true);
+        addLog("Bridge: Signal Established", "sys");
+      }
+      syncToExtension();
+      return;
+    }
+
+    if (type === 'VISIT_BATCH') {
+      const batch = Array.isArray(payload) ? payload : [payload];
+      setVisits(prev => {
+        const updated = [...batch, ...prev].slice(0, 500);
+        return updated;
+      });
+      if (session.userEmail) {
+        visitsApi.saveBatch(batch, session.userEmail).catch(console.error);
+      }
+      addLog(`Telemetry: Received ${batch.length} packets`, 'in', traceId);
+    }
+
+    if (type === 'GEMINI_CHAT_REQUEST') {
+      addLog(`Scout: Processing Query`, 'in', traceId);
+      const { contents, page } = payload || {};
+      const question = typeof contents === 'string' ? contents.trim() : '';
+      const safePage = page && typeof page === 'object' ? page : null;
+      if (!question || !safePage?.url || !safePage?.title) {
+        window.postMessage({
+          source: 'guardiapass_dashboard',
+          type: 'AI_AUDIT_RESULT',
+          text: 'Invalid request payload. Please try again.',
+          correlationId,
+          traceId
+        }, "*");
+        addLog(`Scout: Invalid payload rejected`, 'sys', traceId);
+        return;
+      }
+      const history = chatHistories[safePage.url] || [];
+      try {
+        const response = await askPageQuestion(safePage, question, history);
+        setChatHistories(prev => {
+          const prior = prev[safePage.url] || [];
+          return {
+            ...prev,
+            [safePage.url]: [...prior, { role: 'user', text: question }, { role: 'model', text: response }]
+          };
+        });
+
+        window.postMessage({ 
+          source: 'guardiapass_dashboard', 
+          type: 'AI_AUDIT_RESULT', 
+          text: response, 
+          correlationId, 
+          traceId 
+        }, "*");
+        addLog(`Scout: Response Dispatched`, 'out', traceId);
+      } catch (err) {
+        addLog(`Scout: Analysis Failed`, 'sys', traceId);
+        window.postMessage({
+          source: 'guardiapass_dashboard',
+          type: 'AI_AUDIT_RESULT',
+          text: 'I could not analyze this page right now. Please try again.',
+          correlationId,
+          traceId
+        }, "*");
+      }
+    }
+
+    if (type === 'REQUEST_DECRYPT_FOR_AUTOFILL') {
+      addLog(`Autofill: Decrypting node for Tab ${targetTabId}`, 'in', traceId);
+      const dec = await decryptData(payload.password);
+      window.postMessage({ 
+        source: 'guardiapass_dashboard', 
+        type: 'DECRYPTED_AUTOFILL_READY', 
+        targetTabId, 
+        payload: { ...payload, password: dec }, 
+        traceId 
+      }, "*");
+      addLog(`Autofill: Decrypted payload released to bridge`, 'out', traceId);
+    }
+
+    if (type === 'HUNTER_VERIFY_REQUEST') {
+      addLog(`Hunter: Verifying ${payload.email}`, 'in', traceId);
+      try {
+        const result = await verifyEmail(payload.email);
+        window.postMessage({
+          source: 'guardiapass_dashboard',
+          type: 'HUNTER_VERIFY_RESULT',
+          payload: result,
+          correlationId: data.correlationId,
+          traceId
+        }, "*");
+        addLog(`Hunter: ${payload.email} → ${result.status} (${result.score}/100)`, 'out', traceId);
+      } catch (err) {
+        addLog(`Hunter: Verification failed for ${payload.email}`, 'sys', traceId);
+      }
+    }
+
+    if (type === 'PAGE_CONTENT_FOR_ADVISOR') {
+      addLog(`Advisor: Received page content from extension`, 'in', traceId);
+      setAdvisorPageContext({
+        url: payload.url,
+        title: payload.title,
+        content: payload.content,
+      });
+      setActiveSection(AppSection.AIAdvisor);
+    }
+
+    if (type === 'SAVE_CREDENTIAL') {
+      addLog(`Vault: Saving credential for ${payload.url}`, 'in', traceId);
+      const encrypted = await encryptData(payload.password);
+      const newEntry: PasswordEntry = {
+        id: Math.random().toString(36).substr(2, 9),
+        name: payload.name || payload.url,
+        url: payload.url,
+        username: payload.username,
+        password: encrypted,
+        category: 'Other',
+        lastModified: Date.now(),
+        isEncrypted: true
+      };
+      setPasswords(prev => [...prev, newEntry]);
+      if (session.userEmail) {
+        vaultApi.savePassword({ ...newEntry, userEmail: session.userEmail }).catch(console.error);
+      }
+      window.postMessage({ source: 'guardiapass_dashboard', type: 'CREDENTIAL_SAVED', traceId }, "*");
+      addLog(`Vault: Credential saved for ${payload.url}`, 'out', traceId);
+    }
+  }, [isExtensionActive, addLog, syncToExtension, chatHistories, session.userEmail]);
+
+  useEffect(() => {
+    window.addEventListener('message', handleBridgeMessages);
+    const watchdog = setInterval(() => {
+      if (Date.now() - lastHeartbeat.current > 10000 && isExtensionActive) {
+        setIsExtensionActive(false);
+        addLog("Bridge: Signal Lost", "sys");
+      }
+    }, 5000);
+    return () => {
+      window.removeEventListener('message', handleBridgeMessages);
+      clearInterval(watchdog);
+    };
+  }, [handleBridgeMessages, isExtensionActive, addLog]);
+
+  const handleUnlock = (email: string) => {
+    setSession({ isLocked: false, userEmail: email, lastActive: Date.now() });
+    addLog(`Identity Confirmed: ${email}`, 'sys');
+  };
+
+  if (session.isLocked) return <AuthGateway onUnlock={handleUnlock} />;
+
+  const activeColor = theme === 'forest' ? 'emerald' : theme === 'obsidian' ? 'amber' : theme === 'neon' ? 'pink' : 'sky';
+
+  return (
+    <div className={`flex flex-col lg:flex-row h-screen overflow-hidden text-slate-200 theme-${theme}`} style={{ backgroundColor: bgColor }}>
+      <Sidebar activeSection={activeSection} setActiveSection={setActiveSection} isSecure={isExtensionActive} activeColor={activeColor} />
+      <main className="flex-1 flex flex-col min-w-0 h-full relative">
+        <header className="h-16 shrink-0 border-b border-white/5 flex items-center justify-between px-8 bg-black/20 backdrop-blur-xl z-30">
+          <div className="flex items-center gap-3">
+             <div className={`w-2 h-2 rounded-full ${isExtensionActive ? `bg-${activeColor}-500 shadow-[0_0_10px_#10b981]` : 'bg-slate-700'}`} />
+             <span className="text-[10px] font-black uppercase tracking-[0.4em] text-slate-500">
+               {isExtensionActive ? 'Uplink Synchronized' : 'Searching for Signal...'}
+             </span>
+             {isDemoActive && (
+               <div className="flex items-center gap-1.5 ml-4 px-2.5 py-1 bg-amber-500/10 border border-amber-500/20 rounded-full animate-pulse">
+                 <FlaskConical className="w-3 h-3 text-amber-400" />
+                 <span className="text-[8px] font-black text-amber-400 uppercase tracking-widest">Sim</span>
+               </div>
+             )}
+          </div>
+          <div className="flex items-center gap-4">
+             <button onClick={() => setShowDebug(!showDebug)} className={`p-2.5 transition-all relative ${showDebug ? 'text-indigo-400' : 'text-slate-500 hover:text-indigo-400'}`}>
+               <Terminal className="w-4 h-4" />
+               {isExtensionActive && !showDebug && <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 bg-indigo-500 rounded-full animate-ping" />}
+             </button>
+             <button onClick={() => setSession(s => ({...s, isLocked: true}))} className="p-2.5 text-slate-500 hover:text-red-400 transition-all">
+               <Lock className="w-4 h-4" />
+             </button>
+          </div>
+        </header>
+
+        <div className="flex-1 overflow-y-auto custom-scrollbar">
+          {activeSection === AppSection.Vault && <Vault passwords={passwords} setPasswords={setPasswords} identities={identities} setIdentities={setIdentities} userEmail={session.userEmail || ''} />}
+          {activeSection === AppSection.Verifier && <Verifier onVisit={(url) => { window.open(url, '_blank'); }} />}
+          {activeSection === AppSection.BreachScanner && <BreachScanner />}
+          {activeSection === AppSection.Network && <NetworkMonitor isSecure={isExtensionActive} visits={visits} />}
+          {activeSection === AppSection.Analytics && <Analytics visits={visits} />}
+          {activeSection === AppSection.AIAdvisor && <AIAdvisor pageContext={advisorPageContext} />}
+          {activeSection === AppSection.Education && <Education />}
+          {activeSection === AppSection.Download && <DownloadPage />}
+          {activeSection === AppSection.Settings && <Settings currentTheme={theme} setTheme={setTheme} bgColor={bgColor} setBgColor={setBgColor} passwords={passwords} setPasswords={setPasswords} />}
+        </div>
+
+        {activeSection === AppSection.Verifier && (
+          <div className="fixed bottom-0 right-0 w-1/2 h-1/2 z-[50] pointer-events-none opacity-20 hover:opacity-100 transition-opacity">
+            <div className="w-full h-full pointer-events-auto">
+               <ExtensionSimulator onNavigate={() => {}} />
+            </div>
+          </div>
+        )}
+
+        {showDebug && (
+          <div className="absolute right-0 top-16 bottom-0 w-96 bg-[#020617]/98 backdrop-blur-3xl border-l border-white/10 z-[100] flex flex-col font-mono animate-in slide-in-from-right duration-500 shadow-2xl">
+            <div className="p-6 border-b border-white/10 flex items-center justify-between bg-black/40">
+              <span className="text-xs font-black uppercase text-white flex items-center gap-2">
+                <Activity className="w-4 h-4 text-emerald-500"/> Bridge Telemetry
+              </span>
+              <button onClick={() => setShowDebug(false)}><X className="w-4 h-4 text-slate-500 hover:text-white"/></button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-4 space-y-3 text-[10px]">
+              {debugLogs.map((log, i) => (
+                <div key={i} className={`p-3 rounded-xl border border-white/5 animate-in fade-in slide-in-from-top-1 ${log.type === 'in' ? 'text-indigo-400 bg-indigo-500/5' : log.type === 'out' ? 'text-emerald-400 bg-emerald-500/5' : 'text-amber-500 bg-amber-500/5'}`}>
+                  <div className="flex justify-between items-center mb-1">
+                    <span className="opacity-40 text-[8px] font-bold">{log.type.toUpperCase()}</span>
+                    <span className="opacity-40 text-[8px] font-bold">{log.time}</span>
+                  </div>
+                  <div className="font-bold leading-relaxed mb-1">{log.msg}</div>
+                  {log.traceId && <div className="text-[7px] text-slate-600 font-mono tracking-tighter">TRACE_ID: {log.traceId}</div>}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </main>
+    </div>
+  );
+};
+
+export default App;

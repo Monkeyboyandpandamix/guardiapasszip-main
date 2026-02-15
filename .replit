@@ -1,0 +1,68 @@
+modules = ["nodejs-20", "postgresql-16"]
+[nix]
+channel = "stable-25_05"
+packages = ["unzip"]
+
+[agent]
+expertMode = true
+integrations = ["javascript_gemini_ai_integrations:2.0.0"]
+
+[userenv]
+
+[userenv.shared]
+
+[userenv.production]
+NODE_ENV = "production"
+
+[workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Start application"
+
+[[workflows.workflow]]
+name = "Start application"
+author = "agent"
+
+[workflows.workflow.metadata]
+outputType = "webview"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npm run dev"
+waitForPort = 5000
+
+[[ports]]
+localPort = 3001
+externalPort = 3002
+
+[[ports]]
+localPort = 5000
+externalPort = 80
+
+[[ports]]
+localPort = 5001
+externalPort = 3000
+
+[[ports]]
+localPort = 5002
+externalPort = 3001
+
+[[ports]]
+localPort = 5173
+externalPort = 5173
+
+[[ports]]
+localPort = 5174
+externalPort = 3003
+
+[deployment]
+deploymentTarget = "autoscale"
+run = ["node", "server/index.js"]
+build = ["npm", "run", "build"]
