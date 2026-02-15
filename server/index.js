@@ -31,11 +31,46 @@ loadDotEnvFile(path.join(projectRoot, '.env'));
 loadDotEnvFile(path.join(projectRoot, '.env.local'));
 
 const app = express();
+app.disable('x-powered-by');
 app.use(express.json({ limit: '10mb' }));
-app.use(cors());
+const DEFAULT_ALLOWED_ORIGINS = [
+  'http://localhost:5000',
+  'http://localhost:3000',
+  'http://localhost:3001',
+  'http://127.0.0.1:5000',
+  'http://127.0.0.1:3000',
+  'http://127.0.0.1:3001',
+  'https://guardiapass.replit.app',
+];
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '')
+  .split(',')
+  .map((v) => v.trim())
+  .filter(Boolean);
+const CORS_ALLOWLIST = new Set(ALLOWED_ORIGINS.length > 0 ? ALLOWED_ORIGINS : DEFAULT_ALLOWED_ORIGINS);
+
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+  next();
+});
+
+app.use(cors({
+  origin(origin, callback) {
+    if (!origin) return callback(null, true);
+    if (CORS_ALLOWLIST.has(origin)) return callback(null, true);
+    callback(new Error('CORS origin denied'));
+  },
+  methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+  credentials: false,
+}));
 
 let pool = null;
 let dbAvailable = false;
+const rateWindowMs = 60_000;
+const rateState = new Map();
 
 if (process.env.DATABASE_URL) {
   pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
@@ -163,6 +198,25 @@ function normalizeBreachPayload(result) {
     count,
     breaches: normalizedBreaches,
     summary: summary || (found ? 'Potential exposure indicators found in public breach intelligence.' : 'No reliable public breach indicators found for this query.'),
+  };
+}
+
+function applyRateLimit(key, limit) {
+  return (req, res, next) => {
+    const now = Date.now();
+    const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+    const bucketKey = `${key}:${ip}`;
+    const bucket = rateState.get(bucketKey) || { count: 0, resetAt: now + rateWindowMs };
+    if (now > bucket.resetAt) {
+      bucket.count = 0;
+      bucket.resetAt = now + rateWindowMs;
+    }
+    bucket.count += 1;
+    rateState.set(bucketKey, bucket);
+    if (bucket.count > limit) {
+      return res.status(429).json({ error: 'Too many requests. Please retry shortly.' });
+    }
+    return next();
   };
 }
 
@@ -465,7 +519,7 @@ function ensureGeminiConfigured(res) {
   return true;
 }
 
-app.post('/api/ai/verify-url', async (req, res) => {
+app.post('/api/ai/verify-url', applyRateLimit('ai-verify-url', 60), async (req, res) => {
   try {
     if (!ensureGeminiConfigured(res)) return;
     const { ai, Type } = await getGemini();
@@ -529,7 +583,7 @@ app.post('/api/ai/verify-url', async (req, res) => {
   }
 });
 
-app.post('/api/ai/chat', async (req, res) => {
+app.post('/api/ai/chat', applyRateLimit('ai-chat', 90), async (req, res) => {
   try {
     if (!ensureGeminiConfigured(res)) return;
     const { ai } = await getGemini();
@@ -553,7 +607,7 @@ app.post('/api/ai/chat', async (req, res) => {
   }
 });
 
-app.post('/api/ai/analyze-password', async (req, res) => {
+app.post('/api/ai/analyze-password', applyRateLimit('ai-analyze-password', 90), async (req, res) => {
   try {
     if (!ensureGeminiConfigured(res)) return;
     const { ai, Type } = await getGemini();
@@ -580,7 +634,7 @@ app.post('/api/ai/analyze-password', async (req, res) => {
   }
 });
 
-app.post('/api/ai/generate-passphrase', async (req, res) => {
+app.post('/api/ai/generate-passphrase', applyRateLimit('ai-generate-passphrase', 90), async (req, res) => {
   try {
     if (!ensureGeminiConfigured(res)) return;
     const { ai } = await getGemini();
@@ -596,7 +650,7 @@ app.post('/api/ai/generate-passphrase', async (req, res) => {
   }
 });
 
-app.post('/api/ai/scan-page', async (req, res) => {
+app.post('/api/ai/scan-page', applyRateLimit('ai-scan-page', 60), async (req, res) => {
   try {
     if (!ensureGeminiConfigured(res)) return;
     const { ai, Type } = await getGemini();
@@ -642,7 +696,7 @@ app.post('/api/ai/scan-page', async (req, res) => {
   }
 });
 
-app.post('/api/ai/suggest-addresses', async (req, res) => {
+app.post('/api/ai/suggest-addresses', applyRateLimit('ai-suggest-addresses', 90), async (req, res) => {
   try {
     if (!ensureGeminiConfigured(res)) return;
     const { ai } = await getGemini();
@@ -659,7 +713,7 @@ app.post('/api/ai/suggest-addresses', async (req, res) => {
   }
 });
 
-app.post('/api/breach/password', async (req, res) => {
+app.post('/api/breach/password', applyRateLimit('breach-password', 120), async (req, res) => {
   try {
     const { hash } = req.body;
     const prefix = hash.substring(0, 5);
@@ -682,7 +736,7 @@ app.post('/api/breach/password', async (req, res) => {
   }
 });
 
-app.post('/api/breach/email', async (req, res) => {
+app.post('/api/breach/email', applyRateLimit('breach-email', 90), async (req, res) => {
   try {
     const email = normalizeEmail(req.body?.email);
     if (!isValidEmail(email)) {
@@ -745,7 +799,7 @@ Focus on well-documented incidents affecting the email's domain (${domain}) and 
   }
 });
 
-app.post('/api/breach/username', async (req, res) => {
+app.post('/api/breach/username', applyRateLimit('breach-username', 90), async (req, res) => {
   try {
     const username = normalizeUsername(req.body?.username);
     if (!isValidUsername(username)) {
@@ -809,7 +863,7 @@ Do not fabricate data and do not claim dark-web certainty without public evidenc
   }
 });
 
-app.post('/api/hunter/verify', async (req, res) => {
+app.post('/api/hunter/verify', applyRateLimit('hunter-verify', 60), async (req, res) => {
   try {
     if (!HUNTER_API_KEY) {
       return res.status(503).json({ error: 'Hunter API key is not configured.' });
@@ -829,7 +883,7 @@ app.post('/api/hunter/verify', async (req, res) => {
   }
 });
 
-app.post('/api/tts/elevenlabs', async (req, res) => {
+app.post('/api/tts/elevenlabs', applyRateLimit('tts-elevenlabs', 60), async (req, res) => {
   try {
     if (!ELEVENLABS_API_KEY) {
       return res.status(503).json({ error: 'ElevenLabs API key is not configured.' });
@@ -885,7 +939,7 @@ app.post('/api/tts/elevenlabs', async (req, res) => {
   }
 });
 
-app.post('/api/backboard/assistants', async (req, res) => {
+app.post('/api/backboard/assistants', applyRateLimit('backboard-assistants', 30), async (req, res) => {
   try {
     const response = await getFetchImpl()('https://app.backboard.io/api/assistants', {
       method: 'POST',
@@ -899,7 +953,7 @@ app.post('/api/backboard/assistants', async (req, res) => {
   }
 });
 
-app.post('/api/backboard/threads/:assistantId', async (req, res) => {
+app.post('/api/backboard/threads/:assistantId', applyRateLimit('backboard-threads', 45), async (req, res) => {
   try {
     const response = await getFetchImpl()(`https://app.backboard.io/api/assistants/${req.params.assistantId}/threads`, {
       method: 'POST',
@@ -913,7 +967,7 @@ app.post('/api/backboard/threads/:assistantId', async (req, res) => {
   }
 });
 
-app.post('/api/backboard/messages/:threadId', async (req, res) => {
+app.post('/api/backboard/messages/:threadId', applyRateLimit('backboard-messages', 90), async (req, res) => {
   try {
     const formData = new URLSearchParams();
     formData.append('content', req.body.content);

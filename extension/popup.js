@@ -25,6 +25,21 @@ let cachedData = { passwords: [], identities: [] };
 let pageContext = null;
 let isSending = false;
 
+function normalizeHost(value) {
+  if (!value) return '';
+  try {
+    return new URL(value).hostname.toLowerCase();
+  } catch {
+    return String(value).toLowerCase().replace(/^https?:\/\//, '').split('/')[0];
+  }
+}
+
+function domainMatches(currentHost, savedUrl) {
+  const targetHost = normalizeHost(savedUrl);
+  if (!currentHost || !targetHost) return false;
+  return currentHost === targetHost || currentHost.endsWith(`.${targetHost}`) || targetHost.endsWith(`.${currentHost}`);
+}
+
 init();
 
 async function init() {
@@ -39,6 +54,19 @@ async function init() {
       cachedData.identities = res.vault.identities || [];
     }
     renderList();
+    if (!cachedData.passwords.length && !cachedData.identities.length) {
+      chrome.runtime.sendMessage({ type: 'REQUEST_VAULT_SYNC' }, () => {
+        setTimeout(() => {
+          chrome.storage.local.get(['vault'], (fresh) => {
+            if (fresh.vault) {
+              cachedData.passwords = fresh.vault.passwords || [];
+              cachedData.identities = fresh.vault.identities || [];
+              renderList();
+            }
+          });
+        }, 900);
+      });
+    }
   });
 }
 
@@ -85,8 +113,8 @@ async function renderList() {
 
   const matchingFirst = currentTab === 'passwords' 
     ? [...data].sort((a, b) => {
-        const aMatch = currentDomain && a.url && currentDomain.includes(a.url.replace(/https?:\/\//, '').split('/')[0]);
-        const bMatch = currentDomain && b.url && currentDomain.includes(b.url.replace(/https?:\/\//, '').split('/')[0]);
+        const aMatch = currentDomain && a.url && domainMatches(currentDomain, a.url);
+        const bMatch = currentDomain && b.url && domainMatches(currentDomain, b.url);
         return (bMatch ? 1 : 0) - (aMatch ? 1 : 0);
       })
     : data;
@@ -94,8 +122,7 @@ async function renderList() {
   matchingFirst.forEach(item => {
     const el = document.createElement('div');
     el.className = 'list-item';
-    const isMatch = currentTab === 'passwords' && currentDomain && item.url && 
-      currentDomain.includes(item.url.replace(/https?:\/\//, '').split('/')[0]);
+    const isMatch = currentTab === 'passwords' && currentDomain && item.url && domainMatches(currentDomain, item.url);
     
     if (isMatch) el.style.borderColor = 'rgba(16, 185, 129, 0.3)';
 
@@ -110,10 +137,48 @@ async function renderList() {
     if (currentTab === 'passwords') {
       el.onclick = async () => {
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (tab?.id && item?.username) {
+          chrome.tabs.sendMessage(tab.id, {
+            type: 'AUTOFILL_USERNAME_ONLY',
+            payload: { username: item.username }
+          }).catch(() => {});
+
+          // Fallback for sites like Google where content-script message timing can fail.
+          chrome.scripting.executeScript({
+            target: { tabId: tab.id, allFrames: true },
+            func: (username) => {
+              const selectors = [
+                '#identifierId',
+                'input[type="email"]',
+                'input[name="identifier"]',
+                'input[name="email"]',
+                'input[autocomplete="username"]',
+                'input[autocomplete="email"]',
+                'input[type="text"]'
+              ];
+              const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+              for (const sel of selectors) {
+                const field = document.querySelector(sel);
+                if (!field || field.disabled || field.readOnly) continue;
+                if (setter) setter.call(field, username);
+                else field.value = username;
+                field.dispatchEvent(new Event('input', { bubbles: true }));
+                field.dispatchEvent(new Event('change', { bubbles: true }));
+                const nextBtn = document.querySelector('#identifierNext button, #identifierNext, button[jsname=\"LgbsSe\"]');
+                if (nextBtn && typeof nextBtn.click === 'function') {
+                  setTimeout(() => nextBtn.click(), 120);
+                }
+                return true;
+              }
+              return false;
+            },
+            args: [item.username]
+          }).catch(() => {});
+        }
         chrome.runtime.sendMessage({
           type: 'AUTOFILL_TRIGGER',
           tabId: tab.id,
-          payload: { id: item.id, username: item.username, password: item.password }
+          payload: { id: item.id, url: item.url, username: item.username, password: item.password }
         });
         window.close();
       };

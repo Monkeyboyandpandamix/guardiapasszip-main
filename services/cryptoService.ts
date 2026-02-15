@@ -4,7 +4,7 @@
  * High-performance memoized AES-GCM-256 implementation
  */
 
-const LEGACY_SALT: Uint8Array<ArrayBuffer> = new Uint8Array(
+const LEGACY_SALT = new Uint8Array(
   new TextEncoder().encode("guardiapass_v3_neural_core_salt")
 );
 const LEGACY_MASTER_KEY = 'guardiapass_master_pass';
@@ -50,7 +50,7 @@ export const isBiometricAvailable = async (): Promise<boolean> => {
 
 async function getDerivation(
   password: string,
-  salt: Uint8Array<ArrayBuffer>
+  salt: Uint8Array
 ): Promise<CryptoKey> {
   const cacheKey = `${password}_${btoa(String.fromCharCode(...salt))}`;
   if (_keyCache.has(cacheKey)) return _keyCache.get(cacheKey)!;
@@ -60,7 +60,7 @@ async function getDerivation(
     "raw", enc.encode(password), { name: "PBKDF2" }, false, ["deriveKey"]
   );
   const key = await window.crypto.subtle.deriveKey(
-    { name: "PBKDF2", salt, iterations: 100000, hash: "SHA-256" },
+    { name: "PBKDF2", salt: salt as BufferSource, iterations: 100000, hash: "SHA-256" },
     material,
     { name: "AES-GCM", length: 256 },
     false,

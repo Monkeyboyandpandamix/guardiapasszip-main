@@ -1,4 +1,18 @@
 (function() {
+  const hasChromeApis = () => !!(globalThis.chrome && chrome.runtime && chrome.runtime.id);
+  const safeStorageSet = (payload) => {
+    if (!hasChromeApis() || !chrome.storage?.local) return;
+    try {
+      chrome.storage.local.set(payload, () => { void chrome.runtime?.lastError; });
+    } catch (e) {}
+  };
+  const safeRuntimeSend = (payload) => {
+    if (!hasChromeApis() || !chrome.runtime?.sendMessage) return;
+    try {
+      chrome.runtime.sendMessage(payload, () => { void chrome.runtime?.lastError; });
+    } catch (e) {}
+  };
+
   let gpActiveAudio = null;
   let gpPasswordMeterEl = null;
   let gpPasswordMeterField = null;
@@ -194,18 +208,17 @@
     });
   }
 
-  const isDashboard = document.documentElement.getAttribute('data-guardiapass-role') === 'dashboard' || 
-                      document.title.includes("GuardiaPass");
+  const isDashboard = document.documentElement.getAttribute('data-guardiapass-role') === 'dashboard';
 
   if (isDashboard) {
     console.debug("[GuardiaPass] Dashboard Bridge Active.");
     
     window.addEventListener('message', (e) => {
       if (e.data && e.data.source === 'guardiapass_dashboard') {
-        if (e.data.type === 'VAULT_SYNC') chrome.storage.local.set({ vault: e.data.payload });
+        if (e.data.type === 'VAULT_SYNC') safeStorageSet({ vault: e.data.payload });
         
         if (e.data.type === 'DECRYPTED_AUTOFILL_READY') {
-          chrome.runtime.sendMessage({
+          safeRuntimeSend({
             type: 'DECRYPTED_DATA_REPLY',
             targetTabId: e.data.targetTabId,
             payload: e.data.payload,
@@ -214,7 +227,7 @@
         }
         
         if (e.data.type === 'AI_AUDIT_RESULT') {
-          chrome.runtime.sendMessage({ 
+          safeRuntimeSend({ 
             type: 'AI_RESPONSE_RELAY', 
             text: e.data.text, 
             correlationId: e.data.correlationId,
@@ -228,7 +241,7 @@
         }
 
         if (e.data.type === 'HUNTER_VERIFY_RESULT') {
-          chrome.runtime.sendMessage({
+          safeRuntimeSend({
             type: 'HUNTER_RESULT_RELAY',
             payload: e.data.payload,
             correlationId: e.data.correlationId,
@@ -242,11 +255,13 @@
       window.postMessage({ source: 'guardiapass_extension', type: 'HEARTBEAT' }, "*");
     }, 1000);
 
-    chrome.runtime.onMessage.addListener((msg) => {
-      if (msg.source === 'guardiapass_extension') {
-        window.postMessage({ ...msg }, "*");
-      }
-    });
+    if (hasChromeApis() && chrome.runtime?.onMessage) {
+      chrome.runtime.onMessage.addListener((msg) => {
+        if (msg.source === 'guardiapass_extension') {
+          window.postMessage({ ...msg }, "*");
+        }
+      });
+    }
     return;
   }
 
@@ -283,35 +298,44 @@
   }
 
   function scanVisibleEmails() {
-    const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
     const emailElements = findEmailElements();
 
-    emailElements.forEach(({ element, email }) => {
-      if (element.dataset.gpHunterScanned) return;
-      element.dataset.gpHunterScanned = 'true';
+    emailElements.forEach((item) => {
+      try {
+        const element = item?.element;
+        const email = String(item?.email || '').toLowerCase();
+        if (!element || !(element instanceof Element) || !email) return;
+        if (!hasChromeApis() || !chrome.runtime?.sendMessage) return;
 
-      if (hunterCache[email]) {
-        applyHighlight(element, email, hunterCache[email]);
-        return;
-      }
+        if (element.dataset.gpHunterScanned) return;
+        element.dataset.gpHunterScanned = 'true';
 
-      element.classList.add('gp-email-scanning');
-      element.dataset.gpHunterEmail = email;
-      scanCount++;
-      updateStatusBar();
-
-      chrome.runtime.sendMessage({
-        type: 'HUNTER_VERIFY_REQUEST',
-        payload: { email },
-        correlationId: email
-      }, (response) => {
-        if (chrome.runtime.lastError) return;
-        element.classList.remove('gp-email-scanning');
-        if (response && response.result) {
-          hunterCache[email] = response.result;
-          applyHighlight(element, email, response.result);
+        if (hunterCache[email]) {
+          applyHighlight(element, email, hunterCache[email]);
+          return;
         }
-      });
+
+        element.classList.add('gp-email-scanning');
+        element.dataset.gpHunterEmail = email;
+        scanCount++;
+        updateStatusBar();
+
+        chrome.runtime.sendMessage({
+          type: 'HUNTER_VERIFY_REQUEST',
+          payload: { email },
+          correlationId: email
+        }, (response) => {
+          if (chrome.runtime.lastError) return;
+          if (!(element instanceof Element)) return;
+          element.classList.remove('gp-email-scanning');
+          if (response && response.result && typeof response.result === 'object') {
+            hunterCache[email] = response.result;
+            applyHighlight(element, email, response.result);
+          }
+        });
+      } catch (e) {
+        // Ignore malformed scan entries to keep page stable.
+      }
     });
   }
 
@@ -380,6 +404,7 @@
   }
 
   function applyHighlight(element, email, result) {
+    if (!result || typeof result !== 'object') return;
     element.classList.remove('gp-email-scanning', 'gp-email-valid', 'gp-email-risky', 'gp-email-invalid');
 
     if (result.status === 'invalid' || result.block || result.disposable || result.gibberish || result.score < 30) {
@@ -400,6 +425,7 @@
   }
 
   function showHunterTooltip(event, email, result) {
+    if (!result || typeof result !== 'object') return;
     hideHunterTooltip();
 
     let statusColor, statusLabel, reasonText;
@@ -520,15 +546,34 @@
     return patterns.some(p => lower.includes(p));
   }
 
-  function findPasswordField(inputs) {
-    return inputs.find(i => 
-      i.type === 'password' || 
-      matchesAny(i.name, ['pass', 'pwd', 'senha', 'contraseña']) ||
-      matchesAny(i.id, ['pass', 'pwd', 'password']) ||
-      matchesAny(i.autocomplete, ['password', 'current-password', 'new-password']) ||
-      matchesAny(i.getAttribute('placeholder'), ['password', 'contraseña', 'mot de passe']) ||
-      matchesAny(i.getAttribute('aria-label'), ['password'])
-    );
+  function getVisibleInputs(inputs) {
+    return inputs.filter((i) => {
+      if (!i || i.disabled || i.readOnly) return false;
+      if (i.type === 'hidden') return false;
+      const rect = i.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    });
+  }
+
+  function findPasswordField(inputs, mode = 'login') {
+    const visible = getVisibleInputs(inputs).filter((i) => i.type === 'password' || matchesAny(i.name, ['pass', 'pwd']) || matchesAny(i.id, ['pass', 'pwd']));
+    const scored = visible.map((i) => {
+      let score = 0;
+      const autocomplete = (i.autocomplete || '').toLowerCase();
+      const hint = `${i.name || ''} ${i.id || ''} ${i.getAttribute('placeholder') || ''} ${i.getAttribute('aria-label') || ''}`.toLowerCase();
+      if (mode === 'login') {
+        if (autocomplete === 'current-password') score += 6;
+        if (autocomplete === 'password') score += 4;
+        if (hint.includes('current')) score += 3;
+      } else {
+        if (autocomplete === 'new-password') score += 6;
+        if (hint.includes('new')) score += 3;
+      }
+      if (hint.includes('confirm')) score -= 4;
+      if (i.form) score += 1;
+      return { i, score };
+    }).sort((a, b) => b.score - a.score);
+    return scored[0]?.i || null;
   }
 
   function findUsernameField(inputs, passwordField) {
@@ -539,6 +584,7 @@
     return inputs.find(i => {
       if (i === passwordField || i.type === 'hidden' || i.type === 'submit' || i.type === 'button' || i.type === 'checkbox' || i.type === 'radio') return false;
       if (i.offsetParent === null && i.type !== 'email') return false;
+      if (i.disabled || i.readOnly) return false;
 
       return (
         i.type === 'email' || i.type === 'tel' ||
@@ -552,6 +598,45 @@
     });
   }
 
+  function fillUsernameOnly(username) {
+    const allInputs = Array.from(document.querySelectorAll('input'));
+    const prioritized = [
+      document.querySelector('#identifierId'),
+      document.querySelector('input[type="email"]'),
+      document.querySelector('input[name="identifier"]'),
+      document.querySelector('input[name="email"]'),
+      document.querySelector('input[autocomplete="username"]'),
+      document.querySelector('input[autocomplete="email"]')
+    ].filter(Boolean);
+    const candidate = prioritized[0] || findUsernameField(allInputs, null) || allInputs.find((i) =>
+      !i.disabled && !i.readOnly && (i.type === 'email' || i.type === 'text')
+    );
+    if (!candidate || !username) return false;
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+    if (setter) setter.call(candidate, username);
+    else candidate.value = username;
+    candidate.dispatchEvent(new Event('input', { bubbles: true }));
+    candidate.dispatchEvent(new Event('change', { bubbles: true }));
+    candidate.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'Enter' }));
+    return true;
+  }
+
+  function normalizeHost(value) {
+    if (!value) return '';
+    try {
+      return new URL(value).hostname.toLowerCase();
+    } catch {
+      return String(value).toLowerCase().replace(/^https?:\/\//, '').split('/')[0];
+    }
+  }
+
+  function domainMatches(currentHost, targetHostOrUrl) {
+    const current = normalizeHost(currentHost);
+    const target = normalizeHost(targetHostOrUrl);
+    if (!current || !target) return false;
+    return current === target || current.endsWith(`.${target}`) || target.endsWith(`.${current}`);
+  }
+
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg.type === 'PLAY_TTS_AUDIO') {
       playTtsAudio(msg.payload);
@@ -563,12 +648,37 @@
       return;
     }
 
+    if (msg.type === 'AUTOFILL_USERNAME_ONLY') {
+      const ok = fillUsernameOnly(msg?.payload?.username || '');
+      if (!ok) showTtsToast('Could not locate email/username field on this page.', true);
+      return;
+    }
+
     if (msg.type === 'AUTOFILL_EXECUTE_FINAL') {
       const { payload } = msg;
+      const pageHost = location.hostname.toLowerCase();
+      if (payload?.url && !domainMatches(pageHost, payload.url)) {
+        showTtsToast('Autofill warning: credential domain differs from this page.', true);
+      }
+      if (location.protocol === 'http:' && pageHost !== 'localhost' && pageHost !== '127.0.0.1') {
+        showTtsToast('Autofill warning: this page is not HTTPS.', true);
+      }
       const allInputs = Array.from(document.querySelectorAll('input'));
       
-      let passwordField = findPasswordField(allInputs);
+      let passwordField = findPasswordField(allInputs, 'login');
       let userField = findUsernameField(allInputs, passwordField);
+      if (!passwordField) {
+        const fallbackPassword = allInputs.find((i) => i.type === 'password' && !i.disabled && !i.readOnly);
+        if (fallbackPassword) passwordField = fallbackPassword;
+      }
+      if (!userField) {
+        const fallbackUser = allInputs.find((i) =>
+          !i.disabled &&
+          !i.readOnly &&
+          (i.type === 'email' || i.type === 'text' || i.autocomplete === 'username' || i.autocomplete === 'email')
+        );
+        if (fallbackUser) userField = fallbackUser;
+      }
 
       const simulateInteraction = (el, val) => {
         if (!el || !val) return;
@@ -600,6 +710,9 @@
 
       if (userField) simulateInteraction(userField, payload.username || payload.email);
       if (passwordField) simulateInteraction(passwordField, payload.password);
+      if (!userField && !passwordField) {
+        showTtsToast('Autofill failed: no compatible login fields detected.', true);
+      }
     }
 
     if (msg.type === 'OPEN_PAGE_SCOUT') injectScout();
@@ -628,6 +741,17 @@
 
   let savePromptShown = false;
   let detectedCredentials = { username: '', password: '', url: '' };
+  let lastSavePromptAt = 0;
+
+  function maybeShowSavePrompt(username, password) {
+    const now = Date.now();
+    if (!password || password.length < 8) return;
+    if (savePromptShown) return;
+    if (now - lastSavePromptAt < 7000) return;
+    detectedCredentials = { username: username || '', password, url: location.hostname };
+    lastSavePromptAt = now;
+    showSavePrompt();
+  }
 
   function detectPasswordFields() {
     const passwordFields = document.querySelectorAll('input[type="password"]');
@@ -667,20 +791,24 @@
         gpLastPasswordField = passField;
         gpLastForm = form || passField.closest('form') || null;
         renderPasswordMeter(passField);
+        const allInputs = form ? Array.from(form.querySelectorAll('input')) : Array.from(document.querySelectorAll('input'));
+        const userField = findUsernameField(allInputs, passField);
+        maybeShowSavePrompt(userField?.value || '', passField.value || '');
       });
       passField.addEventListener('change', () => {
-        if (passField.value.length >= 8 && !savePromptShown) {
-          const allInputs = form ? Array.from(form.querySelectorAll('input')) : Array.from(document.querySelectorAll('input'));
-          const userField = findUsernameField(allInputs, passField);
-          detectedCredentials = {
-            username: userField?.value || '',
-            password: passField.value,
-            url: location.hostname
-          };
-          gpLastPasswordField = passField;
-          gpLastForm = form || passField.closest('form') || null;
-          showSavePrompt();
-        }
+        const allInputs = form ? Array.from(form.querySelectorAll('input')) : Array.from(document.querySelectorAll('input'));
+        const userField = findUsernameField(allInputs, passField);
+        gpLastPasswordField = passField;
+        gpLastForm = form || passField.closest('form') || null;
+        maybeShowSavePrompt(userField?.value || '', passField.value || '');
+      });
+      passField.addEventListener('keydown', (ev) => {
+        if (ev.key !== 'Enter') return;
+        const allInputs = form ? Array.from(form.querySelectorAll('input')) : Array.from(document.querySelectorAll('input'));
+        const userField = findUsernameField(allInputs, passField);
+        gpLastPasswordField = passField;
+        gpLastForm = form || passField.closest('form') || null;
+        maybeShowSavePrompt(userField?.value || '', passField.value || '');
       });
     });
   }
@@ -694,10 +822,7 @@
     gpLastPasswordField = passField;
     gpLastForm = form || passField?.closest('form') || null;
     
-    if (password && !savePromptShown) {
-      detectedCredentials = { username, password, url: location.hostname };
-      showSavePrompt();
-    }
+    maybeShowSavePrompt(username, password);
   }
 
   function showSavePrompt() {

@@ -226,8 +226,16 @@ const App: React.FC = () => {
     }
 
     if (type === 'REQUEST_DECRYPT_FOR_AUTOFILL') {
+      if (!payload || typeof payload !== 'object' || typeof payload.password !== 'string' || typeof targetTabId !== 'number') {
+        addLog(`Autofill: Invalid decrypt payload rejected`, 'sys', traceId);
+        return;
+      }
       addLog(`Autofill: Decrypting node for Tab ${targetTabId}`, 'in', traceId);
       const dec = await decryptData(payload.password);
+      if (!dec) {
+        addLog(`Autofill: Decrypt failed`, 'sys', traceId);
+        return;
+      }
       window.postMessage({ 
         source: 'guardiapass_dashboard', 
         type: 'DECRYPTED_AUTOFILL_READY', 
@@ -266,6 +274,10 @@ const App: React.FC = () => {
     }
 
     if (type === 'SAVE_CREDENTIAL') {
+      if (!payload || typeof payload !== 'object' || typeof payload.password !== 'string' || typeof payload.url !== 'string') {
+        addLog(`Vault: Invalid credential payload rejected`, 'sys', traceId);
+        return;
+      }
       addLog(`Vault: Saving credential for ${payload.url}`, 'in', traceId);
       const encrypted = await encryptData(payload.password);
       const newEntry: PasswordEntry = {
@@ -284,6 +296,11 @@ const App: React.FC = () => {
       }
       window.postMessage({ source: 'guardiapass_dashboard', type: 'CREDENTIAL_SAVED', traceId }, "*");
       addLog(`Vault: Credential saved for ${payload.url}`, 'out', traceId);
+    }
+
+    if (type === 'REQUEST_VAULT_SNAPSHOT') {
+      syncToExtension();
+      addLog(`Vault: Snapshot sync requested by extension`, 'sys', traceId);
     }
   }, [isExtensionActive, addLog, syncToExtension, chatHistories, session.userEmail, session.isLocked]);
 

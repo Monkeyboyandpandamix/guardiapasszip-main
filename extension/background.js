@@ -378,4 +378,21 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
     return false;
   }
+
+  if (request.type === 'REQUEST_VAULT_SYNC') {
+    findDashboardTab().then(async (dash) => {
+      if (!dash) dash = await ensureDashboardOpen();
+      if (dash) {
+        chrome.tabs.sendMessage(dash.id, {
+          source: 'guardiapass_extension',
+          type: 'REQUEST_VAULT_SNAPSHOT',
+          traceId
+        }).catch(() => {});
+        sendResponse({ status: 'requested', traceId });
+      } else {
+        sendResponse({ status: 'error', msg: 'Dashboard not open' });
+      }
+    });
+    return true;
+  }
 });
