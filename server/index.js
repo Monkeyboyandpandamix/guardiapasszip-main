@@ -37,9 +37,13 @@ const DEFAULT_ALLOWED_ORIGINS = [
   'http://localhost:5000',
   'http://localhost:3000',
   'http://localhost:3001',
+  'http://localhost:5173',
+  'http://localhost:4173',
   'http://127.0.0.1:5000',
   'http://127.0.0.1:3000',
   'http://127.0.0.1:3001',
+  'http://127.0.0.1:5173',
+  'http://127.0.0.1:4173',
   'https://guardiapass.replit.app',
 ];
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '')
@@ -47,6 +51,16 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '')
   .map((v) => v.trim())
   .filter(Boolean);
 const CORS_ALLOWLIST = new Set(ALLOWED_ORIGINS.length > 0 ? ALLOWED_ORIGINS : DEFAULT_ALLOWED_ORIGINS);
+const LOCAL_ORIGIN_REGEX = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i;
+
+function isTrustedOrigin(origin) {
+  if (!origin || origin === 'null') return true;
+  if (CORS_ALLOWLIST.has(origin)) return true;
+  if (LOCAL_ORIGIN_REGEX.test(origin)) return true;
+  if (origin.startsWith('chrome-extension://')) return true;
+  if (origin.startsWith('moz-extension://')) return true;
+  return false;
+}
 
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -59,9 +73,8 @@ app.use((req, res, next) => {
 
 app.use(cors({
   origin(origin, callback) {
-    if (!origin) return callback(null, true);
-    if (CORS_ALLOWLIST.has(origin)) return callback(null, true);
-    callback(new Error('CORS origin denied'));
+    if (isTrustedOrigin(origin)) return callback(null, true);
+    return callback(null, false);
   },
   methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
   credentials: false,

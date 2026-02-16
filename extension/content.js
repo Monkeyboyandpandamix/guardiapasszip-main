@@ -781,6 +781,10 @@
       });
     }
 
+    if (msg.type === 'PING_BRIDGE') {
+      return;
+    }
+
     if (msg.type === 'HUNTER_VERIFY_RESPONSE' && msg.payload) {
       const email = msg.correlationId;
       hunterCache[email] = msg.payload;

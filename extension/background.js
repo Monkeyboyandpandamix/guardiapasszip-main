@@ -47,6 +47,34 @@ async function processHunterQueue() {
 
 let lastKnownDashUrl = null;
 
+function isLikelyDashboardTab(tab) {
+  const url = String(tab?.url || '');
+  const title = String(tab?.title || '');
+  if (!url) return false;
+  if (!/^https?:\/\//i.test(url)) return false;
+  if (/\/api(\/|$)/i.test(url)) return false;
+  if (title.includes('GuardiaPass')) return true;
+  return /localhost|127\.0\.0\.1|guardiapass|replit/i.test(url);
+}
+
+async function ensureBridgeInTab(tabId) {
+  if (!tabId) return false;
+  try {
+    await chrome.tabs.sendMessage(tabId, { source: 'guardiapass_extension', type: 'PING_BRIDGE' });
+    return true;
+  } catch (e) {}
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      files: ['content.js'],
+    });
+    await chrome.tabs.sendMessage(tabId, { source: 'guardiapass_extension', type: 'PING_BRIDGE' });
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
 function guessApiOrigins() {
   const origins = [];
   if (lastKnownDashUrl) {
@@ -147,10 +175,12 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 
 async function findDashboardTab() {
   const tabs = await chrome.tabs.query({});
-  const found = tabs.find(t => 
-    (t.url && (t.url.includes("localhost") || t.url.includes("127.0.0.1") || t.url.includes("guardiapass") || t.url.includes("replit"))) || 
-    (t.title && t.title.includes("GuardiaPass"))
-  );
+  const candidates = tabs.filter(isLikelyDashboardTab);
+  const found = candidates.sort((a, b) => {
+    const aScore = (a.title?.includes('GuardiaPass') ? 2 : 0) + (String(a.url || '').includes('localhost') ? 1 : 0);
+    const bScore = (b.title?.includes('GuardiaPass') ? 2 : 0) + (String(b.url || '').includes('localhost') ? 1 : 0);
+    return bScore - aScore;
+  })[0];
   if (found && found.url) lastKnownDashUrl = found.url;
   return found;
 }
@@ -324,12 +354,27 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.type === 'GEMINI_CHAT_REQUEST') {
     const correlationId = request.correlationId || Math.random().toString(36).substr(2, 5);
     pendingRequests.set(correlationId, sendResponse);
+    setTimeout(() => {
+      const responder = pendingRequests.get(correlationId);
+      if (!responder) return;
+      responder({ text: "The AI engine did not respond in time. Keep dashboard open and try again." });
+      pendingRequests.delete(correlationId);
+    }, 25000);
     
     findDashboardTab().then(async (dash) => {
       if (!dash) {
         dash = await ensureDashboardOpen();
       }
       if (dash) {
+        const bridgeReady = await ensureBridgeInTab(dash.id);
+        if (!bridgeReady) {
+          const responder = pendingRequests.get(correlationId);
+          if (responder) {
+            responder({ text: "Could not initialize dashboard bridge. Reload the dashboard tab and try again." });
+            pendingRequests.delete(correlationId);
+          }
+          return;
+        }
         const sendWithRetry = async (attempts) => {
           for (let i = 0; i < attempts; i++) {
             try {
